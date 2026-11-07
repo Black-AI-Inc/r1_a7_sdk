@@ -1,32 +1,51 @@
-# r1-7a_sdk
-R1 robotic arm low-level control SDK (IM6014 serial bus).
+<div align="center">
 
-### Prebuild environment
-* OS  (Ubuntu 20.04 LTS or higher)
-* CPU  (aarch64 and x86_64)
-* Compiler  (gcc version 9.4.0)
+**简体中文** | [English](README_en.md)
 
-### Environment Setup
+# r1_a7_sdk
 
-Before building or running the SDK, ensure the following dependencies are installed:
+R1-7A 七轴机械臂 SDK（IM6014 串口总线），附键盘点动、Qt GUI 和命令行 IK 等高层控制工具
 
-- CMake (version 3.10 or higher)
-- GCC (version 9.4.0)
+</div>
+
+本仓库 fork 自宇树官方 [unitreerobotics/r1-7a_sdk](https://github.com/unitreerobotics/r1-7a_sdk)，
+基于上游 commit `2c89fe4f`（2026-10-12）。上游的底层 SDK 保持原样，
+新增内容都在 `scripts/`、`tests/` 和两份配置文件中，另对 `ArmMotorBus` 和串口驱动做了少量扩展。
+上游在此之后的更新（左右臂区分等）尚未合并。
+
+本仓库不是宇树官方仓库，新增功能出现问题请在本仓库提 issue。
+
+- [官方 SDK](#官方-sdk)：编译、底层命令、示例、关节标定
+- [高层控制工具](#高层控制工具)：键盘点动、GUI、命令行 FK/IK、重力补偿
+- [许可证](#许可证)
+
+## 官方 SDK
+
+### 运行环境
+
+- 操作系统：Ubuntu 20.04 LTS 及以上
+- CPU：aarch64、x86_64
+- 编译器：gcc 9.4.0
+
+### 安装依赖
+
+编译和运行 SDK 前需要安装：
+
+- CMake（3.10 及以上）
+- GCC（9.4.0）
 - Make
 - pthread
 
-You can install the required packages on Ubuntu 20.04 with:
+在 Ubuntu 20.04 上可以这样安装：
 
 ```bash
 apt-get update
 apt-get install -y cmake g++ build-essential
 ```
 
-Serial access usually requires membership in the `dialout` group (or equivalent) for `/dev/ttyUSB*`.
+访问 `/dev/ttyUSB*` 串口通常需要把用户加入 `dialout` 组。
 
-### Build examples
-
-To build the examples inside this repository:
+### 编译示例
 
 ```bash
 mkdir build
@@ -35,123 +54,155 @@ cmake ..
 make
 ```
 
-Binaries are written to `bin/`:
+可执行文件输出到 `bin/`：
 
-- `test_arm_lowlevel` — low-level FOC / stop / home / goto commands
-- `calibrate_joints` — joint calibration tool (URDF ↔ motor frame)
-- `demo_arm_motion` — pre-programmed joint motion demo
+- `test_arm_lowlevel`：底层命令，包括 FOC、停止、回零和 goto
+- `calibrate_joints`：关节标定工具（URDF 坐标与电机坐标的换算）
+- `demo_arm_motion`：预设的关节运动演示
 
-### Usage
+### 使用方法
 
-Default serial port is `/dev/ttyUSB3`, baudrate `6000000`. Joint calibration is loaded from `config/joint_calib.txt` (path relative to the working directory; when run from `bin/`, the default `../config/joint_calib.txt` is used).
+默认串口 `/dev/ttyUSB3`，波特率 `6000000`。关节标定从 `config/joint_calib.txt` 读取，
+路径相对于当前工作目录；在 `bin/` 下运行时使用默认的 `../config/joint_calib.txt`。
 
-**Hold current pose (FOC):**
+保持当前姿态（FOC）：
 
 ```bash
 cd bin
 ./test_arm_lowlevel --foc --port /dev/ttyUSB3
 ```
 
-**Move to URDF zero (home):**
+回到 URDF 零位：
 
 ```bash
 ./test_arm_lowlevel --home --kp 60
 ```
 
-**Move to a target pose (goto):**
+移动到指定关节角：
 
 ```bash
 ./test_arm_lowlevel --goto --q 0 0 0 0 0 0 0 --kp 60
 ```
 
-**Cartesian target / inverse kinematics (Python wrapper):**
+其他命令：`--stop`、`--zero-torque`、`--clear`、`--reset`。每次运行只能使用一个命令。
+对持续运行的模式，Ctrl-C 会发送停止（mode 0）并退出。
 
-See [单臂 IK 控制脚本使用说明](scripts/README_ik.md) for SDK-URDF FK and
-Unitree-model IK with cached analytic Jacobians and adaptive fixed-orientation search (bounded IPOPT mode retained). From the repository root:
-
-```bash
-./scripts/arm_control.sh fk
-./scripts/arm_control.sh ik --delta 0 0 0.005  # offline, relative to FK(zero seed)
-# Add --hold-ms 3000 --execute to send the target through the existing SDK goto.
-```
-
-**Other commands:** `--stop`, `--zero-torque`, `--clear`, `--reset`. Use exactly one command per run. Ctrl-C sends stop (mode 0) and exits for long-running modes.
-
-**GUI joint/XYZ/RPY sliders, runtime motion settings and live URDF:** Run `./scripts/gui_control.sh` for simulation,
-or `./scripts/gui_control.sh --execute` and click Connect for hardware.
-See [GUI 控制说明](scripts/README_gui.md) for live target/command/feedback readings,
-the interactive URDF view, installation, and hold/stop behavior.
-
-**Keyboard XYZ jogging with hold on key release:**
-
-See [键盘控制说明](scripts/README_keyboard.md). From the repository root,
-run `./scripts/keyboard_control.sh` for simulation or add `--execute` for hardware.
-W/S, A/D, R/F jog XYZ; release/Space holds; P goes to a configurable ready pose;
-H returns to joint zero. Jog, P and H use velocity/acceleration/jerk-limited smooth
-trajectories; held keys precompute the next point to avoid per-step dwell.
-Esc stops and releases torque.
-
-**Run the pre-programmed motion demo:**
+运行预设运动演示：
 
 ```bash
 cd bin
 ./demo_arm_motion --port /dev/ttyUSB3
 ```
 
-The demo waits for feedback from all 7 joints, enables FOC at the current pose, and then runs a fixed sequence of cosine-profile moves. Use `--speed` and `--wrist-speed` to adjust joint velocities, `--kp` / `--kd` to tune gains, and `--rate` to change the control loop frequency (default 100 Hz). Ctrl-C stops all motors and exits.
+演示程序等待 7 个关节都有反馈后，在当前姿态使能 FOC，然后按固定顺序执行余弦速度曲线的运动。
+`--speed`、`--wrist-speed` 调整关节速度，`--kp`、`--kd` 调整增益，`--rate` 设置控制频率（默认 100 Hz）。
+Ctrl-C 停止所有电机并退出。
 
-**Calibrate joints** (pose the arm at the desired URDF zero first):
+关节标定（先把机械臂摆到期望的 URDF 零位）：
 
 ```bash
 ./calibrate_joints --port /dev/ttyUSB3 --out ../config/joint_calib.txt
 ```
 
-Calibration formula: `urdf = dir * scale * motor + offset`.
+标定公式：`urdf = dir * scale * motor + offset`。
 
-### 本仓库新增内容（基于 Unitree 上游）
+### 说明
 
-| 目录 / 文件 | 内容 |
-|---|---|
-| `scripts/keyboard_control.sh`、`scripts/gui_control.sh` | 键盘末端点动、Qt GUI（关节、末端位姿、参数、三维 URDF） |
-| `scripts/arm_control.sh` | 命令行 FK/IK，可经 SDK goto 执行 |
-| `scripts/keyboard_native/` | 两个工具共用的原生 100 Hz 控制 worker：Ruckig 平滑轨迹、重力前馈、关节积分外环、逐关节增益、软故障阻尼保持与恢复、启动越限恢复 |
-| `scripts/tuned_profile.py` | 默认控制配置 `--profile tuned`（见下） |
-| `scripts/gravity_model.py`、`config/dex1_gravity.json` | URDF 加 DEX1-1 夹爪的静态重力模型 |
-| `include/`、`src/arm_motor_bus.*`、`thirdparty/motor_controller/` | 反馈快照（带时间戳和有效标记）、串口独占打开 |
-| `tests/`、`scripts/keyboard_native/test_*.cpp` | Python 单元和集成测试（mock worker），原生单元测试 |
+本 SDK 通过 `thirdparty/motor_controller`（IM6014）在一条串口总线上驱动 7 自由度 R1 机械臂。
+对外的 `q`、`dq`、`tau` 均为 URDF 坐标，换算在 `ArmMotorBus` 内完成。
 
-**安装与编译**（Ubuntu，Python 3.12）：
+## 高层控制工具
+
+| 入口 | 功能 | 详细说明 |
+|---|---|---|
+| `scripts/keyboard_control.sh` | 键盘控制末端沿 XYZ 点动，松键即保持 | [README_keyboard.md](scripts/README_keyboard.md) |
+| `scripts/gui_control.sh` | Qt 界面：关节滑块、末端位姿、运行参数、三维 URDF 显示 | [README_gui.md](scripts/README_gui.md) |
+| `scripts/arm_control.sh` | 命令行 FK/IK，可通过官方 `test_arm_lowlevel --goto` 执行 | [README_ik.md](scripts/README_ik.md) |
+| `scripts/gravity_model.py`、`config/dex1_gravity.json` | 机械臂加 DEX1-1 夹爪的静态重力模型 | [README_gravity.md](scripts/README_gravity.md) |
+
+键盘工具和 GUI 共用一个 C++ 控制进程 `scripts/keyboard_native/worker.cpp`。它以 100 Hz 运行，
+负责 Ruckig 平滑轨迹、重力前馈、关节积分、故障处理和启动时的越限恢复。
+两个工具默认都只连接模拟驱动，不打开串口；加 `--execute` 才连接真机。
+
+对 SDK 本身的改动：`ArmMotorBus` 增加带时间戳的反馈快照（`feedbackSnapshot()`、`feedbackAges()`），
+`open()` 和串口驱动增加独占打开选项。
+
+### 安装
+
+需要 Ubuntu 和 Python 3.12。在仓库根目录：
 
 ```bash
-python3 -m venv .venv-ik
-.venv-ik/bin/python -m pip install -r scripts/requirements-gui.txt   # 包含键盘控制和 IK 的依赖
-./scripts/build_keyboard.sh          # 编译原生 worker，输出到 build/keyboard/
-./scripts/setup_gui.sh               # 可选：检查 GUI 运行库
+python3.12 -m venv .venv-ik
+.venv-ik/bin/python -m pip install -r scripts/requirements-gui.txt   # 已包含键盘工具和 IK 的依赖
+./scripts/build_keyboard.sh    # 编译控制进程，输出到 build/keyboard/
+./scripts/setup_gui.sh         # 可选：检查并补齐 GUI 需要的 Qt 运行库
 ```
 
-启动脚本按 `R1_IK_PYTHON` → `.venv-ik` → `python3` 的顺序选择解释器。
+启动脚本按 `R1_IK_PYTHON` 环境变量、仓库内 `.venv-ik`、系统 `python3` 的顺序选择 Python。
 
-**默认控制配置 `--profile tuned`**：2026-11-03 在 R1-7A + DEX1-1 实机上验证。
+### 快速开始
 
-- J2、J4 为 Kp 200 / Kd 1.41，其余关节 100 / 1；重力补偿 100%。
-- 积分外环权限 3 N·m，带防粘滑振荡；跟踪误差停止阈值 0.1 rad。
-- 软故障进入阻尼保持（不释放力矩）：键盘按 Enter、GUI 点 Recover 即可恢复。
-- 实测：10 mm 单步误差 0.26–0.66 mm，静置 0.62 mm。
-- `--profile legacy` 恢复原默认值：Kp 60 / Kd 0.5，不补偿重力，故障时释放力矩。
-- 详见 [scripts/README_keyboard.md](scripts/README_keyboard.md)、[scripts/README_gui.md](scripts/README_gui.md)。
+```bash
+# 键盘点动：先在模拟模式下熟悉按键
+./scripts/keyboard_control.sh
+./scripts/keyboard_control.sh --execute --port /dev/ttyUSB3
 
-**关节标定**：`config/joint_calib.txt` 是**验证上述参数所用那台机械臂**的标定。换一台机械臂时，先按上文用 `calibrate_joints` 重新标定并覆盖该文件，再使用 tuned 配置；增益和重力参数也应在新机械臂上重新确认。
+# GUI：真机模式下点击“连接真机”后才打开串口
+./scripts/gui_control.sh
+./scripts/gui_control.sh --execute --port /dev/ttyUSB3
 
-**测试**：
+# 命令行：零位 FK；沿 +Z 平移 5 mm 的 IK（只求解，不运动）
+./scripts/arm_control.sh fk
+./scripts/arm_control.sh ik --delta 0 0 0.005
+```
+
+键盘按键：W/S、A/D、R/F 分别沿 `base_link` 的 X、Y、Z 正负方向点动；松键或空格保持；
+P 移到准备姿态；H 回零；Enter 在阻尼保持后恢复；Esc 停止并释放力矩；Q 退出。
+
+### 默认控制参数
+
+键盘工具和 GUI 默认使用 `--profile tuned`，参数定义在 `scripts/tuned_profile.py`，
+2026-11-03 在一台 R1-7A + DEX1-1 上实测确定。`--profile legacy` 恢复工具最初的默认值。
+
+| 项目 | `tuned`（默认） | `legacy` |
+|---|---|---|
+| 增益 | J2、J4：Kp 200 / Kd 1.41；其余关节 Kp 100 / Kd 1 | 全部关节 Kp 60 / Kd 0.5 |
+| 重力补偿 | 100%，使用 `config/dex1_gravity.json` | 关闭 |
+| 关节积分 | ki 1.5/s，每个关节最多 3 N·m | 无 |
+| 跟踪误差阈值 | 0.1 rad | 0.2 rad |
+| 心跳丢失、跟踪超限、非法目标 | 在实测位置阻尼保持，不释放力矩，可恢复 | 释放力矩 |
+| 连接时关节略超出 URDF 限位 | 超出不到 0.2 rad 时自动移回限位内 | 拒绝使能 |
+
+实测结果：10 mm 单步定位误差 0.26–0.66 mm，静止保持误差 0.62 mm。
+
+命令行显式给出的参数优先于配置。如果给出与配置不同的 `--kp` 或 `--kd`，所有关节改用这一组统一增益。
+反馈中断、电机报错、退出 FOC、按 Esc 或停止、程序退出时，两种配置都会释放力矩。
+
+`config/joint_calib.txt` 是做上述实测的那台机械臂的标定。换一台机械臂前，
+先用 `calibrate_joints` 重新标定并覆盖该文件，增益和重力参数也要在新机械臂上重新确认。
+
+### 使用须知
+
+- 程序不做自碰撞和环境碰撞检查，回零和准备姿态都是关节空间运动。
+- 软件停止不能代替硬件急停。释放力矩后机械臂会下落，运行前要能扶住或支撑机械臂。
+- 真机运行前关闭其他占用同一串口的程序。控制进程以独占方式打开串口，但无法赶走已经打开串口的进程。
+- 重力补偿的夹爪质量和重心来自 CAD 按实测总质量缩放，换夹爪或抓取物体时需要修改配置。
+
+### 测试
 
 ```bash
 .venv-ik/bin/python -m pip install -r scripts/requirements-dev.txt
-./scripts/build_keyboard.sh && (cd build/keyboard && ctest)
+./scripts/build_keyboard.sh && ctest --test-dir build/keyboard --output-on-failure
 QT_QPA_PLATFORM=offscreen .venv-ik/bin/python -m pytest -q tests
 ```
 
-全部测试只用 mock worker 和离线计算，不打开串口。
+测试只使用模拟驱动和离线计算，不会打开串口。
 
-### Notice
+## 许可证
 
-This package drives a 7-DOF R1 arm over one serial bus via the vendored `thirdparty/motor_controller` (IM6014). Public `q` / `dq` / `tau` use the URDF frame; conversion happens at the `ArmMotorBus` edge.
+本仓库沿用上游的 [BSD 3-Clause 许可证](LICENSE)（Copyright (c) 2026 Unitree Robotics），新增代码也按此许可发布。以下文件例外：
+
+- `scripts/arm_control.py` 的 IK 改编自宇树 [xr_teleoperate](https://github.com/unitreerobotics/xr_teleoperate)，
+  保留 Apache-2.0 许可，许可证全文和上游署名见 `scripts/ik_licenses/`。
+- `scripts/keyboard_native/third_party/ruckig/` 是未修改的 [Ruckig](https://github.com/pantor/ruckig) v0.15.3，
+  MIT 许可，版本和文件哈希记录在 `SOURCE.json`。
