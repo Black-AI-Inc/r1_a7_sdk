@@ -1,6 +1,7 @@
 """URDF mesh visualization only. Never steps physics or talks to hardware."""
 import multiprocessing as mp
 import queue
+
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -9,6 +10,8 @@ from gui_control_core import feedback_pose
 
 
 class URDFScene:
+    """Headless pybullet scene: the arm URDF, base axes and a TCP marker with axes."""
+
     def __init__(self, tcp=(0, 0, 0, 0, 0, 0)):
         import pybullet as p
         self.p = p
@@ -57,6 +60,7 @@ class URDFScene:
                                                    physicsClientId=self.client)
 
     def render(self, q, camera, width=640, height=480):
+        """RGBA bytes of the arm at q; camera has yaw/pitch (deg) and distance (m)."""
         self.set_q(q)
         p = self.p
         view = p.computeViewMatrixFromYawPitchRoll([0, -.04, .19], camera["distance"],
@@ -72,6 +76,7 @@ class URDFScene:
 
 
 def render_loop(requests, results, tcp):
+    """Body of the render process; reports a failure as an error result."""
     scene = None
     try:
         scene = URDFScene(tcp)
@@ -90,6 +95,8 @@ def render_loop(requests, results, tcp):
 
 
 class RenderProcess:
+    """render_loop in a spawned process; a new frame is requested only when idle."""
+
     def __init__(self, tcp):
         context = mp.get_context("spawn")
         self.requests = context.Queue(maxsize=1)

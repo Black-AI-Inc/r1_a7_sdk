@@ -1,4 +1,8 @@
-"""Tuned profile (default) for the keyboard and GUI tools: native mock worker only."""
+"""Tuned profile (default) for the keyboard and GUI tools: native mock worker only.
+
+Covers the profile's defaults, the settings the worker actually runs with,
+damping on a soft fault and recovery from it in both tools.
+"""
 import sys
 import time
 from pathlib import Path
@@ -18,6 +22,8 @@ ARM = ArmIK()
 
 
 class IdleSolver:
+    """IK solver stand-in that never returns a result."""
+
     def poll(self):
         return None
 

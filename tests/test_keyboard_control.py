@@ -16,7 +16,8 @@ import pygame
 import pytest
 
 
-# These tests pin the original tool behaviour; the tuned profile has its own tests.
+# These tests run the legacy profile (the original tool defaults);
+# tests/test_tuned_profile.py covers the default tuned profile.
 def legacy_args(argv=()):
     return kb.parse_args(["--profile", "legacy", *argv])
 
@@ -52,6 +53,8 @@ def wait_for(worker, predicate, timeout=2, ping=True):
 
 
 class Solver:
+    """Synchronous stand-in for IKProcess: records jobs, returns a preset result."""
+
     def __init__(self):
         self.jobs = []
         self.result = None
@@ -64,7 +67,7 @@ class Solver:
         return result
 
 
-LOAD_BIAS = np.array([0, .015, 0, .01, 0, 0, 0])
+LOAD_BIAS = np.array([0, .015, 0, .01, 0, 0, 0])   # mock plant sag under load, rad
 
 
 @pytest.fixture
@@ -392,7 +395,7 @@ def test_worker_rejects_invalid_targets(worker, command):
     assert state["reason"] in ("invalid_joint_target", "invalid_command")
 
 
-def test_worker_heartbeat_loss_stops(worker):
+def test_legacy_heartbeat_loss_releases_torque(worker):
     state = wait_for(worker, lambda s: s["mode"] == "fault", ping=False)
     assert state["reason"] == "UI_heartbeat_timeout"
 

@@ -43,11 +43,15 @@ struct ArmJointState {
     uint32_t error_code = 0;
 };
 
-/** One receive-lock snapshot; missing packets must not look like measured zero. */
+/**
+ * Feedback of all joints copied under one receive lock, so the fields agree.
+ * ready/age_s tell whether and how long ago a packet arrived: a missing
+ * packet must not look like a measured zero.
+ */
 struct ArmFeedbackSnapshot {
-    std::array<ArmJointState, kArmJointCount> motor{}, urdf{};
+    std::array<ArmJointState, kArmJointCount> motor{}, urdf{};  // raw motor / URDF frame
     std::array<bool, kArmJointCount> ready{};
-    std::array<double, kArmJointCount> age_s{};
+    std::array<double, kArmJointCount> age_s{};                 // infinity before the first packet
     std::array<uint8_t, kArmJointCount> motor_ids{};
     std::array<JointCalibration, kArmJointCount> calibration{};
 };
@@ -72,7 +76,7 @@ public:
     bool open(const std::string& port,
               int baudrate = kArmDefaultBaudrate,
               const std::string& calib_path = kDefaultJointCalibPath,
-              bool exclusive = false);
+              bool exclusive = false);  // TIOCEXCL: no other process can open the port
     void close();
     bool isOpen() const;
 
@@ -117,6 +121,8 @@ public:
 
     /** Age of each latest feedback in seconds; infinity before first packet. */
     std::array<double, kArmJointCount> feedbackAges() const;
+
+    /** Motor- and URDF-frame feedback with readiness, ages, IDs and calibration. */
     ArmFeedbackSnapshot feedbackSnapshot() const;
 
 private:

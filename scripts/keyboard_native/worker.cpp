@@ -1,8 +1,28 @@
-// Persistent SDK position control. stdin protocol, stdout JSON status, stderr logs.
-// No automatic reset/re-enable. STOP releases torque and is latched until the
-// process is restarted. With --fault-kd > 0, soft faults instead enter a latched
-// compliant "damping" hold at the measured pose (gravity feedforward kept);
-// RECOVER resumes position hold there, STOP still releases torque.
+// r1_keyboard_worker: persistent 100 Hz joint position controller used by the
+// keyboard tool, the GUI and other clients through scripts/worker_client.py.
+//
+// I/O: one text command per line on stdin, one JSON status record per line on
+// stdout (at most every 50 ms, "protocol": 3), human-readable logs on stderr.
+//   PING                      UI heartbeat, required at least every 0.5 s
+//   TARGET q1..q7             jog target, at most 0.12 rad from feedback
+//   MOVE q1..q7               absolute joint target
+//   HOME / READY              joint zero / the --ready-q pose
+//   HOLD                      stop the reference where it is
+//   CONFIG rev speed accel jerk kp kd lead_limit tracking_limit move_timeout
+//                             atomic settings update, acknowledged as config_ack
+//   STOP / QUIT               release torque (QUIT also exits)
+//   DAMP / RECOVER            enter the damping hold / leave it at the measured pose
+//   GRAVITY_DIAG, GRAVITY_Z_PREPARE, GRAVITY_TICK
+//                             one-shot gravity commissioning experiment
+//
+// The worker never resets or re-enables the motors by itself. STOP and faults
+// that make the drive untrustworthy (lost feedback, left FOC) release torque
+// and stay latched until the process restarts. With --fault-kd > 0, soft
+// faults (heartbeat loss, tracking error, invalid input, ...) instead enter a
+// latched compliant "damping" hold at the measured pose with the gravity
+// feedforward kept; RECOVER resumes position hold there. Every optional
+// feature defaults to off (the legacy behaviour); scripts/tuned_profile.py
+// turns them on.
 #include "arm_motor_bus.h"
 #include "smooth_motion.h"
 #include "gravity_model.h"
@@ -34,6 +54,7 @@ void onSignal(int) { running = 0; }
 double age(Clock::time_point t) { return std::chrono::duration<double>(Clock::now()-t).count(); }
 void require(bool condition, const char* why) { if (!condition) throw std::runtime_error(why); }
 
+// Command-line settings. CONFIG replaces speed .. move_timeout at runtime.
 struct Options {
     bool mock = true, have_limits = false;
     bool have_gravity = false;
@@ -42,25 +63,27 @@ struct Options {
     std::string port = "/dev/ttyUSB3", calib;
     double kp = 60, kd = .5, speed = .15, acceleration = .5, jerk = 2;
     double lead_limit = .08, tracking_limit = .2, move_timeout = 60;
-    // Opt-in additions; the defaults keep the original behaviour.
+    // Optional features, all off by default.
     double ki = 0, integral_limit = .03;   // joint integral outer loop, 1/s and rad
     double fault_kp = 0, fault_kd = 0;     // fault_kd > 0 enables damping on soft faults
     // Per-joint gains/integral limits (--joint-kp/--joint-kd/--joint-integral-limit,
     // 7 values each) override the scalars. Status then reports kp/kd as arrays,
-    // so consumers that require a uniform kp (gravity diagnostic, VLM gates)
+    // so consumers that require a uniform kp (such as the gravity diagnostic)
     // reject them instead of reading the scalar.
     Q joint_kp{}, joint_kd{}, joint_integral_limit{};
     bool joint_gains = false, joint_limits = false;
     double recover_margin = 0;             // > 0: enable may bring out-of-limit joints back
     Q recover_q{}; bool have_recover_q = false;
-    Q lower{}, upper{};
-    Q mock_q{}, mock_load{};
+    Q lower{}, upper{};                    // URDF joint limits (--limits)
+    Q mock_q{}, mock_load{};               // mock plant: start pose, static load offset
     bool mock_configured = false;
-    // Home translated -Y 5 cm, +Z 5 cm, preserving Home orientation.
+    // READY pose: Home translated -Y 5 cm, +Z 5 cm with the Home orientation
+    // (same as DEFAULT_READY_Q in keyboard_control.py).
     Q ready{0.006792101712, 0.605442587728, 0.003982975938,
             0.349301756762, -0.004018032920, 0.256020348855, 0.009633129608};
 };
 
+// Effective per-joint values: the per-joint option when given, else the scalar.
 Q gains(const Options& o, double scalar, const Q& joint) {
     Q out; out.fill(scalar);
     return o.joint_gains ? joint : out;
@@ -69,13 +92,17 @@ Q integralLimits(const Options& o) {
     Q out; out.fill(o.integral_limit);
     return o.joint_limits ? o.joint_integral_limit : out;
 }
+// Writes v as a JSON array, using the stream's current precision.
+void jsonArray(std::ostream& s, const Q& v) {
+    s<<"[";
+    for (size_t i=0;i<7;++i) s<<(i?",":"")<<v[i];
+    s<<"]";
+}
 // Status value: the scalar, or a JSON array when per-joint values are in use.
 std::string jsonGains(double scalar, const Q& joint, bool per_joint) {
     std::ostringstream s; s<<std::setprecision(10);
     if (!per_joint) { s<<scalar; return s.str(); }
-    s<<"[";
-    for (size_t i=0;i<7;++i) s<<(i?",":"")<<joint[i];
-    s<<"]";
+    jsonArray(s,joint);
     return s.str();
 }
 // The uniform value, or NaN when joints differ (fails any equality check).
@@ -192,6 +219,7 @@ int main(int argc, char** argv) {
         auto o=parse(argc,argv);
         fcntl(STDIN_FILENO,F_SETFL,fcntl(STDIN_FILENO,F_GETFL)|O_NONBLOCK);
         fcntl(STDOUT_FILENO,F_SETFL,fcntl(STDOUT_FILENO,F_GETFL)|O_NONBLOCK);
+        // Exclusive open (TIOCEXCL): no second tool can drive the same port.
         if (!o.mock && !bus.open(o.port,kArmDefaultBaudrate,o.calib,true)) return 2;
         Q q{}, command{}, target{};
         Q measured_dq{}, measured_tau{};
@@ -209,15 +237,22 @@ int main(int argc, char** argv) {
         PositionIntegral integral;
         integral.configure(o.ki,integralLimits(o));
         auto gravity_observation = Clock::now();
+        // True when v lies more than margin past joint i's URDF limits.
         auto outside=[&](size_t i, double v, double margin) { return v<o.lower[i]-margin||v>o.upper[i]+margin; };
         SmoothMotion motion(o.speed,o.acceleration,o.jerk);
+        // Modes: probing (zero-gain packets until feedback is valid), enabling
+        // (waiting for FOC), then the active modes hold, moving (TARGET),
+        // position (MOVE), home, ready and recovering (startup recovery).
+        // damping, fault and stopped are latched. The mock starts in hold.
         std::string mode=o.mock?"hold":"probing", reason, pending;
         auto begin_recovery=[&](const Q& start) {
-            // Joints within the normal 0.03 rad tolerance are captured as usual;
+            // Joints within the normal limit tolerance are captured as usual;
             // the others start at their measured angle and move back inside:
-            // to --recover-q when that is near, otherwise just inside the limit.
+            // to --recover-q when that is near, otherwise 0.02 rad inside the
+            // limit. Their effective limits are widened to 0.03 rad past the
+            // start so the trajectory and feedback checks accept the way back.
             for(size_t i=0;i<7;++i) {
-                if(outside(i,start[i],.03)) {
+                if(outside(i,start[i],kLimitTolerance)) {
                     command[i]=start[i];
                     target[i]=o.have_recover_q&&std::abs(o.recover_q[i]-start[i])<=kMaxRecoveryTravel
                         ?o.recover_q[i]:std::clamp(start[i],o.lower[i]+.02,o.upper[i]-.02);
@@ -228,10 +263,11 @@ int main(int argc, char** argv) {
             integral.reset();
         };
         bool recovery_pending=false;
+        // Mock plant: no serial IO; measured q = command + integral - mock_load.
         if(o.mock) {
             for(size_t i=0;i<7;++i) q[i]=o.mock_q[i];
             bool out=false;
-            for(size_t i=0;i<7;++i) out|=outside(i,q[i],.03);
+            for(size_t i=0;i<7;++i) out|=outside(i,q[i],kLimitTolerance);
             if(out) { begin_recovery(q); mode="recovering"; }
             else for(size_t i=0;i<7;++i) command[i]=target[i]=o.mock_q[i];
             for(size_t i=0;i<7;++i) q[i]=command[i]-o.mock_load[i];
@@ -241,6 +277,7 @@ int main(int argc, char** argv) {
         unsigned long status_seq=0, config_ack=0, config_revision=0;
         std::string config_error;
         auto heartbeat=Clock::now(), phase=heartbeat, next=heartbeat, last_emit=heartbeat;
+        // Hardware only: log the per-joint feedback at the first fault.
         auto record_fault=[&](const std::string& why) {
             if(first_fault_diagnostics=="null" && !o.mock) {
                 first_fault_diagnostics=feedbackDiagnostics(feedback,lower,upper);
@@ -261,8 +298,9 @@ int main(int argc, char** argv) {
         };
         auto active=[&]() { return mode=="hold"||mode=="moving"||mode=="position"||mode=="home"||mode=="ready"||mode=="recovering"; };
         // Soft fault: latched compliant hold at the measured pose. The arm is not
-        // dropped; only fault-kp holds it, so it yields instead of pushing. It
-        // needs live, error-free FOC feedback; otherwise it is a torque release.
+        // dropped; only the low fault-kp/fault-kd gains hold it, so it yields
+        // instead of pushing. It needs live, error-free FOC feedback and
+        // --fault-kd > 0; otherwise it is a torque release.
         auto damp=[&](const std::string& why) {
             if(mode=="damping"||mode=="fault"||mode=="stopped") return;
             if(!(o.fault_kd>0) || !damp_feedback_ok || !(mode=="enabling"||active())) { release(why,true); return; }
@@ -275,6 +313,7 @@ int main(int argc, char** argv) {
             integral.reset();
             lower=o.lower; upper=o.upper;
         };
+        // Start holding at the measured pose, clamped into the URDF limits.
         auto capture_feedback=[&]() {
             for(size_t i=0;i<7;++i) command[i]=target[i]=std::clamp(q[i],o.lower[i],o.upper[i]);
             motion.reset(command);
@@ -291,6 +330,9 @@ int main(int argc, char** argv) {
             gravity_diag.hold();
             // o.gravity_scale already holds the last requested ramp level.
         };
+        // One bus packet per cycle. Probing sends zero gains and torque so the
+        // drives report feedback without pushing; damping holds damp_q with the
+        // fault gains; otherwise the PD setpoint is command plus the integral.
         auto send=[&](bool probing) {
             if(o.mock) return;
             const bool damping=mode=="damping";
@@ -307,6 +349,7 @@ int main(int argc, char** argv) {
             }
             bus.step(cmds);
         };
+        // Status record for the clients; the loop calls this at most every 50 ms.
         auto emit=[&]() {
             auto flush_output=[&]() {
                 while(output_offset<output_pending.size()) {
@@ -317,8 +360,9 @@ int main(int argc, char** argv) {
                 }
                 output_pending.clear(); output_offset=0; return true;
             };
-            // Detailed records may exceed PIPE_BUF. Never truncate a JSON line
-            // or block the control loop on a slow diagnostic reader.
+            // Records may exceed PIPE_BUF. While the previous one is still partly
+            // unsent, finish it and skip this one: never truncate a JSON line or
+            // block the control loop on a slow diagnostic reader.
             if(!flush_output()) return;
             std::ostringstream s;
             double tracking_error=0;
@@ -334,25 +378,20 @@ int main(int argc, char** argv) {
              <<",\"kd\":"<<jsonGains(o.kd,o.joint_kd,o.joint_gains)
              <<",\"kp_base\":"<<o.kp<<",\"kd_base\":"<<o.kd
              <<",\"lead_limit\":"<<o.lead_limit<<",\"tracking_limit\":"<<o.tracking_limit
-             <<",\"move_timeout\":"<<o.move_timeout<<",\"ki\":"<<o.ki<<",\"integral_limit\":"<<jsonGains(o.integral_limit,o.joint_integral_limit,o.joint_limits)
+             <<",\"move_timeout\":"<<o.move_timeout<<",\"ki\":"<<o.ki
+             <<",\"integral_limit\":"<<jsonGains(o.integral_limit,o.joint_integral_limit,o.joint_limits)
              <<",\"fault_kp\":"<<o.fault_kp<<",\"fault_kd\":"<<o.fault_kd
              <<",\"recover_margin\":"<<o.recover_margin<<"}"
              <<",\"mock\":"<<(o.mock?"true":"false")
              <<",\"mode\":\""<<mode<<"\",\"reason\":\""<<reason<<"\",\"q\":[";
             for(size_t i=0;i<7;++i) s<<(i?",":"")<<(std::isfinite(q[i])?q[i]:0);
-            s<<"],\"command\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<command[i];
-            s<<"],\"target\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<target[i];
-            s<<"],\"position_setpoint\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<setpoint[i];
-            s<<"],\"integral\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<integral.value[i];
-            s<<"],\"command_velocity\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<motion.input.current_velocity[i];
-            s<<"],\"command_acceleration\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<motion.input.current_acceleration[i];
-            s<<"],\"gravity_model\":"<<(o.have_gravity?"true":"false")
+            s<<"],\"command\":"; jsonArray(s,command);
+            s<<",\"target\":"; jsonArray(s,target);
+            s<<",\"position_setpoint\":"; jsonArray(s,setpoint);
+            s<<",\"integral\":"; jsonArray(s,integral.value);
+            s<<",\"command_velocity\":"; jsonArray(s,motion.input.current_velocity);
+            s<<",\"command_acceleration\":"; jsonArray(s,motion.input.current_acceleration);
+            s<<",\"gravity_model\":"<<(o.have_gravity?"true":"false")
              <<",\"gravity_tool_mass_kg\":"<<o.gravity_model.tool_mass
              <<",\"gravity_tool_com_m\":["<<o.gravity_model.tool_com[0]<<","<<o.gravity_model.tool_com[1]<<","<<o.gravity_model.tool_com[2]<<"]"
              <<",\"gravity_scale\":"<<o.gravity_scale<<",\"gravity_gain\":"<<gravity_ramp.gain
@@ -361,17 +400,13 @@ int main(int argc, char** argv) {
              <<",\"gravity_diag_elapsed_s\":"<<gravity_diag.elapsed
              <<",\"gravity_diag_start_scale\":"<<gravity_diag.start_scale
              <<",\"gravity_diag_target_scale\":"<<gravity_diag.target_scale
-             <<",\"gravity_arm_nm\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<gravity_prediction.arm[i];
-            s<<"],\"gravity_tool_nm\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<gravity_prediction.tool[i];
-            s<<"],\"tau_ff\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<gravity_ramp.applied[i];
-            s<<"],\"dq\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<measured_dq[i];
-            s<<"],\"tau_est\":[";
-            for(size_t i=0;i<7;++i) s<<(i?",":"")<<measured_tau[i];
-            s<<"],\"feedback_valid\":"<<(feedback_valid?"true":"false")
+             <<",\"gravity_arm_nm\":";
+            jsonArray(s,gravity_prediction.arm);
+            s<<",\"gravity_tool_nm\":"; jsonArray(s,gravity_prediction.tool);
+            s<<",\"tau_ff\":"; jsonArray(s,gravity_ramp.applied);
+            s<<",\"dq\":"; jsonArray(s,measured_dq);
+            s<<",\"tau_est\":"; jsonArray(s,measured_tau);
+            s<<",\"feedback_valid\":"<<(feedback_valid?"true":"false")
              <<",\"feedback_diagnostics\":"<<(o.mock?"[]":feedbackDiagnostics(feedback,lower,upper))
              <<",\"first_fault_feedback\":"<<first_fault_diagnostics
              <<",\"max_tracking_error\":"<<tracking_error
@@ -381,6 +416,7 @@ int main(int argc, char** argv) {
         };
         while(running) {
             const auto now=Clock::now();
+            // Feedback checks for this cycle. The mock plant is always valid.
             bool fresh=true, sound=true, within=true, foc=true, recoverable=o.recover_margin>0;
             if(!o.mock) {
                 feedback=bus.feedbackSnapshot();
@@ -389,14 +425,17 @@ int main(int argc, char** argv) {
                     q[i]=states[i].q;
                     measured_dq[i]=std::isfinite(states[i].dq)?states[i].dq:0;
                     measured_tau[i]=std::isfinite(states[i].tau_est)?states[i].tau_est:0;
-                    fresh &= ages[i]<.2;
+                    fresh &= ages[i]<kFeedbackMaxAge;
                     sound &= std::isfinite(q[i])&&std::isfinite(states[i].dq)&&states[i].error_code==0;
-                    within &= q[i]>=lower[i]-.03&&q[i]<=upper[i]+.03;
+                    within &= q[i]>=lower[i]-kLimitTolerance&&q[i]<=upper[i]+kLimitTolerance;
                     recoverable &= std::isfinite(q[i])&&!outside(i,q[i],o.recover_margin);
                     foc &= states[i].mode==1;
                 }
                 feedback_valid=fresh&&sound&&within;
                 damp_feedback_ok=fresh&&sound&&foc;
+                // Probing waits up to 2 s for valid feedback; a pose within
+                // --recover-margin of the limits starts a startup recovery.
+                // Enabling then waits up to 1 s for every drive to report FOC.
                 if(mode=="probing") {
                     if(feedback_valid) { capture_feedback(); mode="enabling"; phase=now; }
                     else if(fresh&&sound&&recoverable) {
@@ -421,6 +460,8 @@ int main(int argc, char** argv) {
                 if(mode=="probing") release("UI_heartbeat_timeout",true);
                 else if(mode=="enabling"||active()) damp("UI_heartbeat_timeout");
             }
+            // Non-blocking stdin; EOF means the parent is gone. More than 8 KiB
+            // of unparsed input is a protocol error.
             char buffer[2048];
             ssize_t n=read(STDIN_FILENO,buffer,sizeof(buffer));
             if(n==0) { release("parent_disconnected",false); break; }
@@ -444,6 +485,10 @@ int main(int argc, char** argv) {
                 }
                 if(!active()) continue; // latched fault/stop/damping; never re-enable via input
                 if(mode=="recovering") continue; // finish the startup recovery first
+                // Gravity commissioning (gravity_diagnostic.h): GRAVITY_DIAG [scale]
+                // ramps the feedforward from the settled scale to the target
+                // (default 0.5) at a stationary hold; GRAVITY_TICK is the external
+                // observer's heartbeat; GRAVITY_Z_PREPARE starts the z validation.
                 if(op=="GRAVITY_TICK") {
                     if(gravity_diag.armed() && !(in>>extra)) gravity_observation=Clock::now();
                     continue;
@@ -477,6 +522,7 @@ int main(int argc, char** argv) {
                     } catch(const std::exception& e) { damp(e.what()); }
                     continue;
                 }
+                // During the experiment only HOLD (cancel) and, in z validation, TARGET.
                 if(gravity_diag.armed() && op!="HOLD" && !(gravity_diag.status=="z_validation" && op=="TARGET")) {
                     damp("gravity_diagnostic_only_session"); continue;
                 }
@@ -511,6 +557,8 @@ int main(int argc, char** argv) {
                 else if(op=="HOME") { target.fill(0); mode="home"; phase=now; }
                 else if(op=="READY") { target=o.ready; mode="ready"; phase=now; }
                 else if(op=="TARGET"||op=="MOVE") {
+                    // Both must lie inside the URDF limits; a TARGET (jog) also
+                    // within 0.12 rad of the measured pose.
                     Q candidate{}; bool valid=true;
                     for(size_t i=0;i<7;++i) {
                         if(!(in>>candidate[i])) valid=false;
@@ -523,6 +571,8 @@ int main(int argc, char** argv) {
                 } else damp("invalid_command");
             }
             if(!running) break;
+            // Advance the reference one cycle along the trajectory, subject to
+            // the tracking_limit (damp) and lead_limit (pause) gates.
             if(active()) {
                 bool reached=false, advance=true;
                 Q proposed=command;
@@ -594,12 +644,15 @@ int main(int argc, char** argv) {
             if(mode=="probing") send(true);
             else if(mode=="enabling"||active()||mode=="damping") send(false);
             if(age(last_emit)>.05) { emit(); last_emit=now; }
+            // Fixed 10 ms period (the dt of .01 used above); after an overrun the
+            // schedule restarts from now instead of running catch-up cycles.
             next+=std::chrono::milliseconds(10);
             if(next<Clock::now()) next=Clock::now();
             std::this_thread::sleep_until(next);
         }
         if(mode!="fault"&&mode!="stopped") release("process_exit",false);
         emit();
+        // Repeat the stop packet for 100 ms in case a frame is lost on the bus.
         if(!o.mock) { for(int i=0;i<10;++i) {bus.stop(); std::this_thread::sleep_for(std::chrono::milliseconds(10));} }
         bus.close();
         return mode=="fault"?2:0;

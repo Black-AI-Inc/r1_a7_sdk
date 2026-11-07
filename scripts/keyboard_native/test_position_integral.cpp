@@ -1,3 +1,4 @@
+// Joint integral outer loop against simple static-load and stick-slip plants.
 #include "position_integral.h"
 #include <cassert>
 #include <cmath>
@@ -9,7 +10,7 @@ int main() {
     Q reference{}, measured{}, still{}, moving{};
     measured[3]=-.04;
     off.update(reference,measured,still,.01);
-    assert(off.value[3]==0 && off.apply(reference)[3]==0);       // ki=0: original behaviour
+    assert(off.value[3]==0 && off.apply(reference)[3]==0);       // ki=0: integral disabled
 
     PositionIntegral integral;
     integral.configure(1.5,.03);

@@ -1,3 +1,4 @@
+// Guards, ramp and cancellation of the one-shot gravity diagnostic.
 #include "gravity_diagnostic.h"
 #include <cassert>
 #include <iostream>

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# One-time GUI setup: install requirements-gui.txt into $R1_IK_PYTHON or
+# .venv-ik (created if missing), unpack libxcb-cursor0 locally under
+# build/gui-runtime when the system lacks it, and build the native worker.
 set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 sdk_dir="$(cd -- "$script_dir/.." && pwd)"

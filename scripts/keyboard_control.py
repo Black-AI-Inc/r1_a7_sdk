@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Keyboard Cartesian jog with persistent SDK hold. Default: offline simulation."""
+"""Keyboard Cartesian jog with persistent SDK hold. Default: offline simulation.
+
+Held keys step the TCP along base_link axes at a fixed orientation; the native
+worker holds the arm in between. --execute connects the real arm.
+"""
 import argparse
 import json
 import multiprocessing as mp
@@ -7,13 +11,12 @@ import os
 from pathlib import Path
 import queue
 import signal
-import subprocess
 import sys
 import time
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 from arm_control import ArmIK, SDK, vector
-from gravity_model import add_gravity_args, worker_gravity_args
+from gravity_model import add_gravity_args
 from tuned_profile import add_profile_argument, describe, parse_args_with_profile
 import numpy as np
 
@@ -70,6 +73,8 @@ def solve_loop(requests, results, tcp):
 
 
 class IKProcess:
+    """solve_loop in a spawned process, with one request and one result in flight."""
+
     def __init__(self, tcp):
         context = mp.get_context("spawn")
         self.requests = context.Queue(maxsize=1)
@@ -96,12 +101,18 @@ class IKProcess:
         self.results.close()
 
 
-# Preserve the public import used by the GUI and existing callers.
+# Re-exported: the GUI and the tests import Worker from this module.
 from worker_client import Worker
 
 
 class JogController:
-    """Testable key-state machine. Each change invalidates old IK results."""
+    """Testable key-state machine. Each change invalidates old IK results.
+
+    Holding direction keys moves the TCP in steps of `step` metres at the
+    orientation captured when the jog started; the next step is solved while
+    the current one is still being executed. send() delivers worker commands.
+    """
+
     def __init__(self, send, arm, step=.002):
         self.send, self.arm, self.step = send, arm, step
         self.keys = set()
@@ -133,6 +144,7 @@ class JogController:
         self.note = note
 
     def key(self, name, down):
+        """Handle one key press or release (pygame key name)."""
         if self.stopped:
             return
         if self.damping:
@@ -170,6 +182,9 @@ class JogController:
             self.note = "STOPPED: torque released. Restart to enable."
 
     def tick(self, state, solver, now):
+        """One UI frame: follow the worker state, send a ready IK result as
+        TARGET, or submit the next jog step to the solver.
+        """
         if state is None:
             return
         if state["mode"] in ("fault", "stopped"):
@@ -203,11 +218,14 @@ class JogController:
                 if error:
                     self.hold("IK rejected target; holding. Release and try another direction.")
                     print(error, file=sys.stderr)
+                # Use a result only while it is fresh (0.5 s), was solved from the
+                # current plan point and feedback has not moved 0.03 rad since.
                 elif (state["mode"] in ("hold", "moving") and now - self.submitted <= .5
                       and self.plan_target is not None
                       and np.max(np.abs(self.plan_target - self.seed)) < 1e-5
                       and np.max(np.abs(measured - self.feedback_seed)) < .03):
                     q = self.arm.check_q(solution)
+                    # The worker rejects a TARGET more than 0.12 rad from feedback.
                     if np.max(np.abs(q-measured)) > .12:
                         self.hold("Jog exceeds tracking margin; holding current setpoint")
                         return
@@ -256,9 +274,11 @@ class JogController:
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--execute", action="store_true", help="Connect real arm; default simulation")
-    p.add_argument("--port", default="/dev/ttyUSB3")
-    p.add_argument("--kp", type=float, default=60)
-    p.add_argument("--kd", type=float, default=.5)
+    p.add_argument("--port", default="/dev/ttyUSB3", help="Arm serial port (with --execute)")
+    p.add_argument("--kp", type=float, default=60,
+                   help="Position gain, .01..100 (tuned profile: 100 with J2/J4 200; "
+                        "any other Kp/Kd pair makes all gains uniform)")
+    p.add_argument("--kd", type=float, default=.5, help="Damping gain, .01..5 (tuned profile: 1 with J2/J4 1.41)")
     p.add_argument("--step-mm", type=float, default=2, help="Cartesian increment per jog, 0.5..5 mm")
     p.add_argument("--joint-speed", type=float, default=.15, help="Joint command speed cap, .01..0.3 rad/s")
     p.add_argument("--joint-accel", type=float, default=.5, help="Joint acceleration cap, .1..2 rad/s^2")
@@ -298,7 +318,8 @@ def draw(screen, font, small, controller, state, args, arm, pygame):
     title = "R1-7A  |  " + ("HARDWARE" if args.execute else "SIMULATION - no serial IO")
     lines = [title, "W / S : +X / -X       A / D : +Y / -Y       R / F : +Z / -Z",
              "Release/Space: HOLD    P: READY    H: ZERO    Enter: RECOVER    Esc: STOP    Q: QUIT",
-             f"Step {args.step_mm:g} mm | V {args.joint_speed:g} | A {args.joint_accel:g} | J {args.joint_jerk:g} (rad/s^n) | {describe(args)}",
+             f"Step {args.step_mm:g} mm | V {args.joint_speed:g} | A {args.joint_accel:g} | "
+             f"J {args.joint_jerk:g} (rad/s^n) | {describe(args)}",
              "Base: base_link | Tool: Link7 + TCP | Keep this window focused."]
     for i, line in enumerate(lines):
         screen.blit((font if i == 0 else small).render(line, True, (225, 233, 242)), (24, 24+i*38))
@@ -306,7 +327,8 @@ def draw(screen, font, small, controller, state, args, arm, pygame):
     color = (255, 115, 110) if controller.stopped else (255, 190, 110) if controller.damping else (95, 220, 170)
     screen.blit(font.render("State: " + mode.upper(), True, color), (24, 236))
     if state and state.get("gravity_model"):
-        gravity_text = f"Gravity {state.get('gravity_gain', 0):.0%} | ff Nm: " + " ".join(f"{v:+.2f}" for v in state.get("tau_ff", []))
+        gravity_text = (f"Gravity {state.get('gravity_gain', 0):.0%} | ff Nm: "
+                        + " ".join(f"{v:+.2f}" for v in state.get("tau_ff", [])))
         if state.get("gravity_saturated"):
             gravity_text += " [CAPPED]"
         screen.blit(small.render(gravity_text, True, color), (24, 205))
@@ -318,11 +340,16 @@ def draw(screen, font, small, controller, state, args, arm, pygame):
         xyz = arm.fk(q)[:3, 3]
         reference_xyz = arm.fk(state["command"])[:3, 3]
         error = np.max(np.abs(np.asarray(state["command"])-state["q"]))
-        screen.blit(small.render("Measured TCP (m): " + "  ".join(f"{v:+.5f}" for v in xyz), True, (225, 233, 242)), (24, 330))
-        screen.blit(small.render("Reference TCP (m): " + "  ".join(f"{v:+.5f}" for v in reference_xyz), True, (150, 205, 255)), (24, 360))
-        screen.blit(small.render(f"Max joint tracking error: {error:.4f} rad | HOLD = frozen reference", True, (225, 233, 242)), (24, 390))
-        screen.blit(small.render("J1..J7 (rad): " + "  ".join(f"{v:+.3f}" for v in state["q"]), True, (225, 233, 242)), (24, 420))
-    screen.blit(small.render("Esc / Q / window close releases torque. Space keeps holding.", True, (255, 190, 110)), (24, 510))
+        screen.blit(small.render("Measured TCP (m): " + "  ".join(f"{v:+.5f}" for v in xyz),
+                                 True, (225, 233, 242)), (24, 330))
+        screen.blit(small.render("Reference TCP (m): " + "  ".join(f"{v:+.5f}" for v in reference_xyz),
+                                 True, (150, 205, 255)), (24, 360))
+        screen.blit(small.render(f"Max joint tracking error: {error:.4f} rad | HOLD = frozen reference",
+                                 True, (225, 233, 242)), (24, 390))
+        screen.blit(small.render("J1..J7 (rad): " + "  ".join(f"{v:+.3f}" for v in state["q"]),
+                                 True, (225, 233, 242)), (24, 420))
+    screen.blit(small.render("Esc / Q / window close releases torque. Space keeps holding.",
+                             True, (255, 190, 110)), (24, 510))
     pygame.display.flip()
 
 
@@ -364,7 +391,8 @@ def main(argv=None):
         last_ping = 0.0
         focused = True
         last_state_seq = None
-        print("W/S +/-X; A/D +/-Y; R/F +/-Z; release/Space hold; P ready; H zero; Esc stop; Q quit.", flush=True)
+        print("W/S +/-X; A/D +/-Y; R/F +/-Z; release/Space hold; P ready; H zero; "
+              "Enter recover; Esc stop; Q quit.", flush=True)
         while alive:
             now = time.monotonic()
             state = worker.poll()

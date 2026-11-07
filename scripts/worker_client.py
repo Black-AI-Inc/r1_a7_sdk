@@ -1,6 +1,8 @@
 """Headless client shared by the keyboard tool, the GUI and external services.
 
-Importing this module never starts a worker or accesses hardware.
+Worker runs build/keyboard/r1_keyboard_worker as a child process and speaks
+its line protocol (see scripts/keyboard_native/worker.cpp). Importing this
+module never starts a worker or accesses hardware.
 """
 import json
 import os
@@ -15,22 +17,32 @@ else:
     from arm_control import SDK, vector
     from gravity_model import worker_gravity_args
 
+
 class Worker:
+    """One native worker process, started from parsed tool options.
+
+    args.execute selects hardware or the mock plant; mock_q/mock_load set the
+    mock start pose and static load offset. on_state is called for every
+    status record. All pipes are non-blocking, so a stalled worker can never
+    stall the UI event loop.
+    """
+
     def __init__(self, args, arm, *, mock_q=None, mock_load=None, binary=None, on_state=None):
         self.on_state = on_state
         ready = arm.check_q(args.ready_q)
         binary = Path(binary) if binary is not None else SDK / "build/keyboard/r1_keyboard_worker"
         if not binary.is_file():
             raise RuntimeError("Build worker first: ./scripts/build_keyboard.sh")
+        calibration = getattr(args, "calibration_file", SDK / "config/joint_calib.txt")
         command = [str(binary), "--hardware" if args.execute else "--mock",
-                   "--port", args.port, "--calib", str(getattr(args, "calibration_file", SDK / "config/joint_calib.txt")),
+                   "--port", args.port, "--calib", str(calibration),
                    "--kp", str(args.kp), "--kd", str(args.kd),
                    "--joint-speed", str(args.joint_speed),
                    "--joint-accel", str(args.joint_accel), "--joint-jerk", str(args.joint_jerk),
                    "--ready-q", *map(str, ready), "--limits",
                    *map(str, arm.lower), *map(str, arm.upper)]
-        # Optional; the worker defaults keep the original behaviour (no integral,
-        # torque release on every fault, no startup recovery).
+        # Optional; an option missing from args keeps the worker default (no
+        # integral, torque release on every fault, no startup recovery).
         for option in ("lead_limit", "tracking_limit", "move_timeout", "ki", "integral_limit",
                        "fault_kp", "fault_kd", "recover_margin"):
             if hasattr(args, option):
@@ -64,12 +76,17 @@ class Worker:
         self.state_time = time.monotonic()
 
     def send(self, message):
+        """Write one command line; a full pipe raises instead of blocking."""
         data = (message + "\n").encode("ascii")
         count = os.write(self.process.stdin.fileno(), data)
         if count != len(data):
             raise RuntimeError("Worker command pipe blocked")
 
     def poll(self):
+        """Read every complete status line and return the latest state.
+
+        Raises when the worker has exited or sent no status for 0.4 s.
+        """
         while True:
             try:
                 data = os.read(self.process.stdout.fileno(), 4096)
@@ -93,6 +110,7 @@ class Worker:
         return self.state
 
     def close(self):
+        """QUIT (the worker releases torque), then terminate or kill if needed."""
         if self.process.poll() is None:
             try:
                 self.send("QUIT")

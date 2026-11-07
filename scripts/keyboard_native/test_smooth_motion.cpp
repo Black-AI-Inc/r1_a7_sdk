@@ -1,3 +1,4 @@
+// Limits, continuity, online retargeting, HOLD and overshoot rejection of SmoothMotion.
 #include "smooth_motion.h"
 #include <algorithm>
 #include <iostream>

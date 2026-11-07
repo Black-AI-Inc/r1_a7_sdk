@@ -63,6 +63,7 @@ QSplitter::handle { background: white; }
 """.replace("@UI@", (Path(__file__).resolve().parent/"ui").as_posix())
 
 
+# Mouse-wheel scrolling over the page must not change a target by accident.
 class NoWheelSlider(QSlider):
     def wheelEvent(self, event):
         event.ignore()
@@ -74,6 +75,8 @@ class NoWheelSpin(QDoubleSpinBox):
 
 
 class SliderRow(QWidget):
+    """Slider plus spin box for one target value, with command/feedback readout."""
+
     changed = Signal(float)
 
     def __init__(self, name, lower, upper, decimals, unit):
@@ -115,6 +118,7 @@ class SliderRow(QWidget):
         self.changed.emit(value)
 
     def set_target(self, value):
+        # Do not overwrite a number the operator is still typing.
         if self.spin.hasFocus() and self.spin.lineEdit().isModified():
             return
         with QSignalBlocker(self.spin), QSignalBlocker(self.slider):
@@ -130,6 +134,8 @@ class SliderRow(QWidget):
 
 
 class RobotView(QLabel):
+    """Rendered URDF frame; drag to orbit, wheel to zoom."""
+
     def __init__(self):
         super().__init__("正在加载 URDF 网格…")
         self.setAlignment(Qt.AlignCenter)
@@ -177,6 +183,13 @@ class RobotView(QLabel):
 
 
 class ControlWindow(QMainWindow):
+    """Main window of the GUI tool.
+
+    A 20 ms timer pings the worker, follows its status through GuiController
+    and refreshes the widgets. The mock connects at start; with --execute the
+    operator must click Connect.
+    """
+
     def __init__(self, args, *, start_renderer=True, autoconnect=True):
         super().__init__()
         self.args, self.arm = args, ArmIK(tcp=args.tcp)
@@ -664,12 +677,14 @@ def parse_args(argv=None):
     from gravity_model import add_gravity_args
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="Enable hardware mode; click Connect in GUI")
-    parser.add_argument("--port", default="/dev/ttyUSB3")
+    parser.add_argument("--port", default="/dev/ttyUSB3", help="Arm serial port (with --execute)")
+    # Initial motion/protection settings; the Settings page changes them at runtime.
     for key, default in DEFAULTS.items():
         parser.add_argument("--"+key.replace("_", "-"), type=float, default=default)
-    parser.add_argument("--tcp", nargs=6, type=float, default=[0]*6)
-    parser.add_argument("--ready-q", nargs=7, type=float, default=DEFAULT_READY_Q.copy())
-    parser.add_argument("--log", type=Path)
+    parser.add_argument("--tcp", nargs=6, type=float, default=[0]*6, help="Link7 -> TCP xyz/rpy, metres/radians")
+    parser.add_argument("--ready-q", nargs=7, type=float, default=DEFAULT_READY_Q.copy(),
+                        help="P pose J1..J7 radians (default: Home -Y 5cm, +Z 5cm, same orientation)")
+    parser.add_argument("--log", type=Path, help="JSONL diagnostics (default: build/keyboard/logs/gui-TIMESTAMP.jsonl)")
     add_gravity_args(parser)
     add_profile_argument(parser)
     args = parse_args_with_profile(parser, argv)

@@ -1,3 +1,7 @@
+// Without arguments: self-test of the gravity model and torque ramp.
+// With one argument (a native_record() string): evaluate the model for each
+// line of 7 joint angles on stdin; tests/test_gravity.py compares the output
+// with the Python model.
 #include "gravity_model.h"
 #include <iostream>
 #include <iomanip>

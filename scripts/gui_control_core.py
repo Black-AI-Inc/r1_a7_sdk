@@ -24,6 +24,7 @@ def feedback_pose(arm, q):
 
 
 def pose_solver_loop(requests, results, tcp):
+    """Body of the solver process: solve_pose() for each (generation, target, seed, deadline)."""
     arm = ArmIK(tcp=tcp)
     arm.prepare_pose_solver()
     while True:
@@ -82,6 +83,15 @@ class PoseSolver:
 
 
 class GuiController:
+    """Slider/button state machine of the GUI, independent of Qt.
+
+    Joint edits are sent as MOVE at most every 50 ms. Cartesian edits are
+    solved asynchronously with a fixed orientation and only the latest
+    target's result is executed; every interruption bumps `generation` so
+    older results are dropped. Settings changes are applied with CONFIG and
+    wait for the worker's acknowledgement.
+    """
+
     def __init__(self, send, arm, solver, ready_q):
         self.send, self.arm, self.solver = send, arm, solver
         self.ready_q = arm.check_q(ready_q)
@@ -116,7 +126,9 @@ class GuiController:
         self.dirty = False
 
     def _sync(self, q):
-        # Never use measured q to reset a load-supporting PD reference.
+        # Set the slider targets to q. Callers pass the command reference or a
+        # new target, never measured q: re-seeding a load-supporting PD
+        # reference from feedback would drop its equilibrium error.
         self.target_q = self.arm.check_q(q).copy()
         pose = self.arm.fk(q)
         self.target_xyz = pose[:3, 3].copy()
@@ -125,6 +137,7 @@ class GuiController:
         self.preview_valid = True
 
     def update_state(self, state):
+        """Follow one worker status record."""
         if state is None:
             return
         self.state = state
@@ -254,6 +267,7 @@ class GuiController:
         self.last_send = now
 
     def tick(self, now):
+        """Periodic step: settings timeout, IK results, solver restarts, new MOVE/solve."""
         if self.pending_config is not None and now-self.config_started > 1.:
             self.stop()
             raise RuntimeError("驱动参数确认超时")
@@ -284,7 +298,8 @@ class GuiController:
                         detail = ""
                         if report:
                             stages = {"seed": "原位", "local": "局部", "expanded": "扩大", "full": "全范围"}
-                            detail = f"（{stages.get(report['stage'], report['stage'])}搜索，{report['elapsed_s']*1000:.0f} ms）"
+                            detail = (f"（{stages.get(report['stage'], report['stage'])}搜索，"
+                                      f"{report['elapsed_s']*1000:.0f} ms）")
                         self.note = "固定朝向位姿目标已提交平滑轨迹" + detail
         if (self.busy and self.solve_generation != self.generation and self.dirty and self.enabled
                 and self.mode == "cartesian" and now-self.last_edit >= .08
@@ -313,7 +328,3 @@ class GuiController:
             self.solve_started = now
             self.solve_generation = self.generation
             self.note = "正在求解末端位姿；保持按钮可随时中止"
-
-
-def now():
-    return time.monotonic()

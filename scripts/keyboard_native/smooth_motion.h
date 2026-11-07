@@ -4,15 +4,19 @@
 #include <stdexcept>
 #include <ruckig/ruckig.hpp>
 
-// Local, synchronized state-to-state trajectories; no cloud waypoint API.
-// Retargeting preserves velocity/acceleration. HOLD and protective gates instead
-// reset at the last sent position so no unconsumed trajectory can run on.
+// Jerk-limited, phase-synchronized joint trajectories from the vendored Ruckig,
+// computed locally (no cloud waypoint API). Retargeting preserves
+// velocity/acceleration. HOLD and protective gates instead reset at the last
+// sent position so no unconsumed trajectory can run on.
+//
+// Each cycle: propose() computes the next step toward the target; the caller
+// either accept()s it or reset()s at the position it actually sent.
 class SmoothMotion {
 public:
     using Q = std::array<double, 7>;
     ruckig::InputParameter<7> input;
     ruckig::OutputParameter<7> output;
-    ruckig::Ruckig<7> otg{.01};
+    ruckig::Ruckig<7> otg{.01};   // the worker's 10 ms control period
 
     SmoothMotion(double speed, double acceleration, double jerk) {
         input.max_velocity.fill(speed);

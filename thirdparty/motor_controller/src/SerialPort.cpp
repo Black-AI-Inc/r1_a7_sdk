@@ -78,6 +78,7 @@ bool SerialPort::open(const std::string& port, int baudrate, double timeout, boo
         std::cerr << "Failed to open port " << port << ": " << strerror(errno) << std::endl;
         return false;
     }
+    // Exclusive mode: further open() calls on this tty fail with EBUSY.
     if (exclusive && ::ioctl(m_fd, TIOCEXCL) < 0) {
         std::cerr << "Cannot exclusively lock serial port " << port << std::endl;
         ::close(m_fd); m_fd = -1; return false;

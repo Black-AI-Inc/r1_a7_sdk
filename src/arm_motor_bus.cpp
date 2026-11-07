@@ -56,7 +56,7 @@ struct ArmMotorBus::Impl {
     mutable std::mutex fb_mutex;
     std::array<ArmJointState, kArmJointCount> latest_motor{};  // raw motor frame
     std::array<bool, kArmJointCount> fb_ready{};
-    std::array<std::chrono::steady_clock::time_point, kArmJointCount> fb_time{};
+    std::array<std::chrono::steady_clock::time_point, kArmJointCount> fb_time{};  // latest packet
     bool opened = false;
     std::string port;
     int baudrate = kArmDefaultBaudrate;

@@ -1,3 +1,4 @@
+// Every rejection reason is reported for a snapshot with one bad joint of each kind.
 #include "feedback_diagnostics.h"
 #include <iostream>
 #include <limits>

@@ -25,6 +25,7 @@ public:
     ~SerialPort();
 
     bool open(const std::string& port, int baudrate, double timeout = 0.1);
+    // exclusive: TIOCEXCL, so other processes cannot open the port while it is in use.
     bool open(const std::string& port, int baudrate, double timeout, bool exclusive);
     void close();
     bool isOpen() const;

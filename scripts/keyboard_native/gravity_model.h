@@ -6,9 +6,12 @@
 #include <stdexcept>
 #include <string>
 
+// Static gravity torques for the 7-joint chain plus a tool, evaluated by the
+// worker at the measured q. Same model as GravityModel in
+// scripts/gravity_model.py, which serializes it with native_record().
 namespace gravity {
 using V = std::array<double,3>;
-using M = std::array<double,9>;
+using M = std::array<double,9>;   // 3x3, row-major
 using Q = std::array<double,7>;
 inline V add(V a, V b) { for(int i=0;i<3;++i) a[i]+=b[i]; return a; }
 inline V sub(V a, V b) { for(int i=0;i<3;++i) a[i]-=b[i]; return a; }
@@ -18,6 +21,7 @@ inline V cross(V a,V b) { return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b
 inline V mv(M a,V b) { V r{}; for(int i=0;i<3;++i) for(int j=0;j<3;++j) r[i]+=a[i*3+j]*b[j]; return r; }
 inline M mm(M a,M b) { M r{}; for(int i=0;i<3;++i) for(int j=0;j<3;++j) for(int k=0;k<3;++k) r[i*3+j]+=a[i*3+k]*b[k*3+j]; return r; }
 inline M identity() { return {1,0,0,0,1,0,0,0,1}; }
+// Rotation by angle q about the unit axis a (Rodrigues).
 inline M rotation(V a,double q) {
     const double c=std::cos(q), s=std::sin(q);
     M r{}; M skew{0,-a[2],a[1],a[2],0,-a[0],-a[1],a[0],0};
@@ -33,6 +37,9 @@ struct Model {
     std::array<Link,7> links{};
     V g{}, tool_com{};
     double tool_mass=0;
+    // Whitespace-separated record: version 1, gravity vector, then per link the
+    // joint origin rotation (row-major) and translation, joint axis, mass and
+    // COM in the link frame, then tool mass and COM in the Link7 frame.
     static Model parse(const std::string& record) {
         std::istringstream in(record);
         auto read=[&]() { double v=0; check(bool(in>>v)&&std::isfinite(v)); return v; };
@@ -85,11 +92,13 @@ struct Model {
 
 // These are commissioning feedforward caps, NOT motor continuous torque ratings.
 // They limit only the added gravity term; the motor's PD term remains separate.
+// The gain rises to requested_scale over 2 s and the applied torque slews at
+// most 2 N*m/s per joint, so enabling or a model jump never steps the torque.
 struct Ramp {
     Q applied{};
-    const Q caps{8,8,6,6,4,1.5,1.5};
+    const Q caps{8,8,6,6,4,1.5,1.5};   // N*m, J1..J7
     double gain=0;
-    bool saturated=false;
+    bool saturated=false;               // some joint wanted more than its cap
     void reset() { applied.fill(0); gain=0; saturated=false; }
     void update(Q total,double requested_scale,double dt) {
         check(std::isfinite(requested_scale)&&requested_scale>=0&&requested_scale<=1&&std::isfinite(dt)&&dt>=0);

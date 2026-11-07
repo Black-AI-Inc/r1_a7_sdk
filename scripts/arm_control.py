@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Standalone R1-7A FK / CasADi IK -> official test_arm_lowlevel --goto.
 
+fk prints the TCP pose; goto and ik print the planned SDK command and run it
+only with --execute. The SDK goto uses its own --kp/--kd and releases torque
+after --hold-ms; it does not use the keyboard/GUI worker or its profiles.
+
 IK formulation adapted from Unitree xr_teleoperate R1_A7_ArmIK.
 Copyright [2025] [HangZhou YuShu TECHNOLOGY CO.,LTD. ("Unitree Robotics")]
 SPDX-License-Identifier: Apache-2.0
@@ -21,7 +25,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-POSE_IK_TIMEOUT = 3.0
+POSE_IK_TIMEOUT = 3.0   # s, default wall-time budget of one solve_pose() request
 
 SDK = Path(__file__).resolve().parents[1]
 URDF_REL = Path("urdf/R1_Robotic_Arm_V1.1-0915/R1_Robotic_Arm_V1.1_0915/"
@@ -29,6 +33,7 @@ URDF_REL = Path("urdf/R1_Robotic_Arm_V1.1-0915/R1_Robotic_Arm_V1.1_0915/"
 
 
 def vector(values, count):
+    """values as a finite float array of shape (count,), else ValueError."""
     result = np.asarray(values, dtype=float)
     if result.shape != (count,) or not np.isfinite(result).all():
         raise ValueError(f"Expected {count} finite numbers")
@@ -36,6 +41,7 @@ def vector(values, count):
 
 
 def pose_matrix(xyz, rpy):
+    """4x4 transform from a translation and fixed-axis (extrinsic xyz) RPY."""
     result = np.eye(4)
     result[:3, 3] = vector(xyz, 3)
     result[:3, :3] = Rotation.from_euler("xyz", vector(rpy, 3)).as_matrix()
@@ -178,7 +184,9 @@ class ArmIK:
 
         Wall time bounds the entire request, not each restart. A numerical search
         failure is not proof of geometric unreachability. No motion is sent here.
-        Legacy solve(max_step=...) retains its strict bound for keyboard jogging.
+        The bounded solve(max_step=...) keeps its strict joint bound; the
+        keyboard jog uses it. last_pose_report records the stage, attempts,
+        elapsed time and final residuals of the latest request.
         """
         import time
         from scipy.optimize import least_squares
@@ -292,13 +300,14 @@ class ArmIK:
             report["elapsed_s"] = time.monotonic()-started
 
 
-
 def errors(actual, target):
+    """(position error in m, rotation angle error in rad) between two poses."""
     return (float(np.linalg.norm(actual[:3, 3] - target[:3, 3])),
             float(Rotation.from_matrix(actual[:3, :3] @ target[:3, :3].T).magnitude()))
 
 
 def describe(transform):
+    """JSON-friendly position, RPY and quaternion of a 4x4 pose."""
     rotation = Rotation.from_matrix(transform[:3, :3])
     return {"xyz_m": transform[:3, 3].tolist(),
             "rpy_rad": rotation.as_euler("xyz").tolist(),
@@ -306,6 +315,7 @@ def describe(transform):
 
 
 def sdk_command(args, q):
+    """argv for the SDK's test_arm_lowlevel --goto to joint target q."""
     for name in ("kp", "kd", "home_lead"):
         value = getattr(args, name)
         if not np.isfinite(value) or value < 0:

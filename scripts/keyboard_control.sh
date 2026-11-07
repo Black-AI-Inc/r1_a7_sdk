@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Run the keyboard jog tool with the IK Python environment:
+# $R1_IK_PYTHON if set, else .venv-ik in the SDK root, else python3.
 set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 sdk_dir="$(cd -- "$script_dir/.." && pwd)"

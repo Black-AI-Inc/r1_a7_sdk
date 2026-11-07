@@ -1,4 +1,7 @@
-"""All robot control tests use --mock. Qt and URDF rendering run offscreen."""
+"""GUI controller, Qt window, URDF view and native worker tests.
+
+All robot control tests use --mock. Qt and URDF rendering run offscreen.
+"""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json
@@ -23,7 +26,9 @@ from gui_control_core import GuiController, feedback_pose, GUI_IK_TIMEOUT
 from gui_control import ControlWindow, parse_args as _parse_args, STYLE
 from gui_urdf import URDFScene
 
-# These tests pin the original tool behaviour; the tuned profile has its own tests.
+
+# These tests run the legacy profile (the original tool defaults);
+# tests/test_tuned_profile.py covers the default tuned profile.
 def parse_args(argv=()):
     return _parse_args(["--profile", "legacy", *argv])
 
@@ -462,7 +467,8 @@ def test_native_runtime_settings_atomic_ack_limits_and_stop_latch():
     try:
         initial = wait_worker(worker, lambda s: s["mode"] == "hold")
         assert {k: initial["config"][k] for k in DEFAULTS} == DEFAULTS
-        # Opt-in worker additions stay off for the GUI: no integral, plain release.
+        # The legacy profile leaves the optional worker features off: no
+        # integral, torque release on faults, no startup recovery.
         assert {k: initial["config"][k] for k in ("ki", "fault_kd", "recover_margin")} == dict(
             ki=0, fault_kd=0, recover_margin=0)
         values = dict(DEFAULTS, joint_speed=.05, joint_accel=.2, joint_jerk=1., kp=55., kd=.6,
@@ -569,71 +575,78 @@ def test_qt_settings_apply_defaults_and_rotation(app, tmp_path):
 
 
 def test_stale_hard_pose_search_is_preempted_for_latest_target():
-    c,sent,solver=make_controller()
-    c.set_mode('cartesian'); c.update_state(state(seq=1))
-    c.edit_xyz(2,c.target_xyz[2]+.1,1); c.tick(1.1)
-    old=c.generation
-    c.edit_xyz(0,c.target_xyz[0]+.002,1.2); c.tick(1.4)
-    assert solver.restarts==1 and len(solver.jobs)==2
-    assert solver.jobs[-1][0]!=old
-    assert not any(s.startswith('MOVE') for s in sent)
+    c, sent, solver = make_controller()
+    c.set_mode("cartesian")
+    c.update_state(state(seq=1))
+    c.edit_xyz(2, c.target_xyz[2]+.1, 1)
+    c.tick(1.1)
+    old = c.generation
+    c.edit_xyz(0, c.target_xyz[0]+.002, 1.2)
+    c.tick(1.4)
+    assert solver.restarts == 1 and len(solver.jobs) == 2
+    assert solver.jobs[-1][0] != old
+    assert not any(s.startswith("MOVE") for s in sent)
 
 
-def test_new_pose_result_after_old_two_second_limit_can_execute():
-    c,sent,solver=make_controller()
-    c.set_mode('cartesian'); c.update_state(state(seq=1))
-    c.edit_xyz(2,c.target_xyz[2]+.2,1); c.tick(1.1)
-    generation,target,seed=solver.jobs[-1]
-    solution=c.arm.solve_pose(target,seed)
-    solver.result=(generation,solution,'')
-    c.tick(3.2)
-    assert c.preview_valid and sent[-1].startswith('MOVE ')
+def test_pose_result_after_two_seconds_within_gui_timeout_executes():
+    c, sent, solver = make_controller()
+    c.set_mode("cartesian")
+    c.update_state(state(seq=1))
+    c.edit_xyz(2, c.target_xyz[2]+.2, 1)
+    c.tick(1.1)
+    generation, target, seed = solver.jobs[-1]
+    solution = c.arm.solve_pose(target, seed)
+    solver.result = (generation, solution, "")
+    c.tick(3.2)   # 2.1 s after submission, inside GUI_IK_TIMEOUT
+    assert c.preview_valid and sent[-1].startswith("MOVE ")
 
 
 def test_pose_process_uses_expanded_fixed_orientation_search():
     from gui_control_core import PoseSolver
-    arm=ArmIK(); seed=np.asarray(DEFAULT_READY_Q)
-    target=arm.fk(seed); target[2,3]+=.2
-    solver=PoseSolver([0]*6)
+    arm = ArmIK()
+    seed = np.asarray(DEFAULT_READY_Q)
+    target = arm.fk(seed)
+    target[2, 3] += .2
+    solver = PoseSolver([0]*6)
     try:
-        solver.submit(42,target,seed)
-        until=time.monotonic()+GUI_IK_TIMEOUT
-        result=None
-        while result is None and time.monotonic()<until:
-            result=solver.poll()
+        solver.submit(42, target, seed)
+        until = time.monotonic()+GUI_IK_TIMEOUT
+        result = None
+        while result is None and time.monotonic() < until:
+            result = solver.poll()
             time.sleep(.01)
         assert result is not None
-        generation,q,error=result
-        assert generation==42 and not error
+        generation, q, error = result
+        assert generation == 42 and not error
         from arm_control import errors
-        pe,re=errors(arm.fk(q),target)
-        assert pe<=.0001 and re<=.001
-        assert solver.last_report['stage'] in ('expanded','full')
+        pe, re = errors(arm.fk(q), target)
+        assert pe <= .0001 and re <= .001
+        assert solver.last_report["stage"] in ("expanded", "full")
     finally:
         solver.close()
 
 
-def test_gui_large_fixed_orientation_target_reaches_in_mock(app,tmp_path):
+def test_gui_large_fixed_orientation_target_reaches_in_mock(app, tmp_path):
     # Faster trajectory settings only for the ideal mock plant; no hardware.
-    window=ControlWindow(parse_args(['--joint-speed','.5','--joint-accel','1',
-                                    '--joint-jerk','5','--log',str(tmp_path/'large-pose.jsonl')]),
-                         start_renderer=False)
+    window = ControlWindow(parse_args(["--joint-speed", ".5", "--joint-accel", "1",
+                                       "--joint-jerk", "5", "--log", str(tmp_path/"large-pose.jsonl")]),
+                           start_renderer=False)
     try:
         window.show()
-        qt_wait(app,lambda:window.controller is not None and window.controller.enabled)
-        QTest.mouseClick(window.p_button,Qt.LeftButton)
-        qt_wait(app,lambda:window.controller.state['mode']=='hold' and
-                np.max(np.abs(np.asarray(window.controller.state['command'])-DEFAULT_READY_Q))<1e-6)
-        QTest.mouseClick(window.xyz_mode,Qt.LeftButton)
-        qt_wait(app,lambda:window.controller.enabled and window.controller.mode=='cartesian')
-        before=window.arm.fk(window.controller.state['command'])
-        window.xyz_rows[2].spin.setValue(before[2,3]*1000+200)
-        qt_wait(app,lambda:window.controller.preview_valid and window.controller.target_xyz[2]>before[2,3]+.199)
-        qt_wait(app,lambda:window.controller.state['mode']=='hold' and
-                np.max(np.abs(np.asarray(window.controller.state['command'])-window.controller.target_q))<1e-6)
-        actual=window.arm.fk(window.controller.state['command'])
-        assert abs(actual[2,3]-before[2,3]-.2)<.0002
-        assert Rotation.from_matrix(actual[:3,:3]@before[:3,:3].T).magnitude()<.001
-        assert window.solver.last_report['stage'] in ('expanded','full')
+        qt_wait(app, lambda: window.controller is not None and window.controller.enabled)
+        QTest.mouseClick(window.p_button, Qt.LeftButton)
+        qt_wait(app, lambda: window.controller.state["mode"] == "hold" and
+                np.max(np.abs(np.asarray(window.controller.state["command"])-DEFAULT_READY_Q)) < 1e-6)
+        QTest.mouseClick(window.xyz_mode, Qt.LeftButton)
+        qt_wait(app, lambda: window.controller.enabled and window.controller.mode == "cartesian")
+        before = window.arm.fk(window.controller.state["command"])
+        window.xyz_rows[2].spin.setValue(before[2, 3]*1000+200)
+        qt_wait(app, lambda: window.controller.preview_valid and window.controller.target_xyz[2] > before[2, 3]+.199)
+        qt_wait(app, lambda: window.controller.state["mode"] == "hold" and
+                np.max(np.abs(np.asarray(window.controller.state["command"])-window.controller.target_q)) < 1e-6)
+        actual = window.arm.fk(window.controller.state["command"])
+        assert abs(actual[2, 3]-before[2, 3]-.2) < .0002
+        assert Rotation.from_matrix(actual[:3, :3]@before[:3, :3].T).magnitude() < .001
+        assert window.solver.last_report["stage"] in ("expanded", "full")
     finally:
         window.close()

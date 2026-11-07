@@ -14,7 +14,9 @@ from arm_control import SDK, URDF_REL
 from gravity_model import GravityModel, DEFAULT_PROFILE, worker_gravity_args
 from keyboard_control import Worker, DEFAULT_READY_Q, parse_args as _parse_args
 
-# These tests pin the original tool behaviour; the tuned profile has its own tests.
+
+# These tests run the legacy profile (gravity off unless requested);
+# tests/test_tuned_profile.py covers the default tuned profile.
 def parse_args(argv=()):
     return _parse_args(["--profile", "legacy", *argv])
 
@@ -94,11 +96,16 @@ def test_profile_uses_total_mass_without_counting_adapter_twice():
 @pytest.mark.parametrize("bad", ["mass", "mount", "com", "nan", "schema"])
 def test_reject_invalid_profile_before_start(tmp_path, bad):
     data = json.loads(DEFAULT_PROFILE.read_text())
-    if bad == "mass": data["empty_mass_kg"] = -.5
-    if bad == "mount": data["mount_confirmed"] = False
-    if bad == "com": data["gripper_com_in_gripper_m"] = [100, 0, 0]
-    if bad == "nan": data["object_mass_kg"] = float("nan")
-    if bad == "schema": data["schema"] = 2
+    if bad == "mass":
+        data["empty_mass_kg"] = -.5
+    if bad == "mount":
+        data["mount_confirmed"] = False
+    if bad == "com":
+        data["gripper_com_in_gripper_m"] = [100, 0, 0]
+    if bad == "nan":
+        data["object_mass_kg"] = float("nan")
+    if bad == "schema":
+        data["schema"] = 2
     path = tmp_path/"bad.json"
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError):
@@ -147,9 +154,11 @@ def test_gravity_uses_selected_urdf(tmp_path):
 def wait(worker, condition, timeout=3, ping=True):
     end = time.monotonic()+timeout
     while time.monotonic() < end:
-        if ping: worker.send("PING")
+        if ping:
+            worker.send("PING")
         state = worker.poll()
-        if state and condition(state): return state
+        if state and condition(state):
+            return state
         time.sleep(.01)
     raise AssertionError(worker.state)
 
@@ -183,7 +192,7 @@ def test_native_compensation_ramps_uses_measured_q_and_stops():
         worker.close()
 
 
-def test_gravity_default_off_even_with_profile():
+def test_legacy_gravity_is_off_by_default_even_with_profile():
     args = parse_args(["--gravity-profile", str(DEFAULT_PROFILE)])
     model = GravityModel(profile=DEFAULT_PROFILE)
     worker = Worker(args, model.arm)
@@ -195,7 +204,7 @@ def test_gravity_default_off_even_with_profile():
         worker.close()
 
 
-def test_gravity_zero_on_heartbeat_fault():
+def test_legacy_heartbeat_fault_zeroes_gravity():
     args = parse_args(["--gravity-profile", str(DEFAULT_PROFILE), "--gravity-scale", ".25"])
     worker = Worker(args, GravityModel().arm)
     try:

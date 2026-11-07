@@ -152,74 +152,77 @@ def test_adaptive_analytic_jacobian_and_tcp():
     residual, jac = arm._pose_residual(q, target)
     actual = arm.fk(q)
     expected = np.r_[5*(actual[:3, 3]-target[:3, 3]),
-                     (actual[:3, :3]-target[:3, :3]).ravel(order='F')]
+                     (actual[:3, :3]-target[:3, :3]).ravel(order="F")]
     np.testing.assert_allclose(np.asarray(residual).ravel(), expected, atol=1e-12)
     h = 1e-6
-    numerical = np.column_stack([(np.asarray(arm._pose_residual(q+np.eye(7)[i]*h,target)[0]).ravel()-
-                                 np.asarray(arm._pose_residual(q-np.eye(7)[i]*h,target)[0]).ravel())/(2*h)
-                                for i in range(7)])
+    numerical = np.column_stack([(np.asarray(arm._pose_residual(q+np.eye(7)[i]*h, target)[0]).ravel() -
+                                  np.asarray(arm._pose_residual(q-np.eye(7)[i]*h, target)[0]).ravel())/(2*h)
+                                 for i in range(7)])
     np.testing.assert_allclose(jac, numerical, atol=1e-8)
     arm.prepare_pose_solver()
     assert arm._pose_residual is cached
 
 
-@pytest.mark.parametrize('delta', [[0,0,.002], [0,-.1,.1], [.1,0,.1], [-.1,0,.1], [0,0,.2], [0,-.2,.1]])
-def test_adaptive_translation_keeps_fixed_orientation_beyond_old_search_box(arm, delta):
-    seed = np.array([.006792101712,.605442587728,.003982975938,.349301756762,
-                     -.004018032920,.256020348855,.009633129608])
+@pytest.mark.parametrize("delta", [[0, 0, .002], [0, -.1, .1], [.1, 0, .1], [-.1, 0, .1],
+                                   [0, 0, .2], [0, -.2, .1]])
+def test_adaptive_translation_keeps_fixed_orientation_beyond_local_radius(arm, delta):
+    seed = np.array([.006792101712, .605442587728, .003982975938, .349301756762,
+                     -.004018032920, .256020348855, .009633129608])
     target = arm.fk(seed)
-    orientation = target[:3,:3].copy()
-    target[:3,3] += delta
+    orientation = target[:3, :3].copy()
+    target[:3, 3] += delta
     q = arm.solve_pose(target, seed)
     pe, re = control.errors(arm.fk(q), target)
     assert pe <= .0001 and re <= .001
-    np.testing.assert_array_equal(target[:3,:3],orientation)
-    if delta == [0,0,.002]:
-        assert arm.last_pose_report['stage'] == 'local'
+    np.testing.assert_array_equal(target[:3, :3], orientation)
+    if delta == [0, 0, .002]:
+        assert arm.last_pose_report["stage"] == "local"
     else:
+        # Beyond the 0.6 rad local stage (and the bounded solver's 0.5 rad box).
         assert np.max(np.abs(q-seed)) > .6
-        assert arm.last_pose_report['stage'] in ('expanded','full')
+        assert arm.last_pose_report["stage"] in ("expanded", "full")
 
 
 def test_adaptive_full_range_known_fk_targets(arm):
     seed = np.zeros(7)
     rng = np.random.default_rng(20261028)
     stages = set()
-    for known in rng.uniform(arm.lower+.05, arm.upper-.05, (20,7)):
+    for known in rng.uniform(arm.lower+.05, arm.upper-.05, (20, 7)):
         target = arm.fk(known)
         q = arm.solve_pose(target, seed)
         pe, re = control.errors(arm.fk(q), target)
         assert pe <= .0001 and re <= .001
         assert np.all(q >= arm.lower) and np.all(q <= arm.upper)
-        stages.add(arm.last_pose_report['stage'])
-    assert 'full' in stages
+        stages.add(arm.last_pose_report["stage"])
+    assert "full" in stages
 
 
 def test_adaptive_deadline_and_no_false_pi_solution(arm):
     import time
     seed = np.zeros(7)
     target = arm.fk(seed)
-    with pytest.raises(ValueError, match='timeout'):
-        arm.solve_pose(target,seed,deadline=time.monotonic()-1)
-    target[:3,:3] = Rotation.from_rotvec([np.pi,0,0]).as_matrix()@target[:3,:3]
+    with pytest.raises(ValueError, match="timeout"):
+        arm.solve_pose(target, seed, deadline=time.monotonic()-1)
+    target[:3, :3] = Rotation.from_rotvec([np.pi, 0, 0]).as_matrix()@target[:3, :3]
     try:
-        q = arm.solve_pose(target,seed)
+        q = arm.solve_pose(target, seed)
     except ValueError as exc:
-        assert 'IK' in str(exc)
+        assert "IK" in str(exc)
     else:
-        pe,re=control.errors(arm.fk(q),target)
+        pe, re = control.errors(arm.fk(q), target)
         assert pe <= .0001 and re <= .001
-        assert not np.allclose(q,seed)
+        assert not np.allclose(q, seed)
 
 
-@pytest.mark.parametrize('timeout', [0,-1,float('nan'),float('inf')])
-def test_adaptive_rejects_bad_timeout(arm,timeout):
-    with pytest.raises(ValueError,match='timeout'):
-        arm.solve_pose(arm.fk(np.zeros(7)),np.zeros(7),timeout=timeout)
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_adaptive_rejects_bad_timeout(arm, timeout):
+    with pytest.raises(ValueError, match="timeout"):
+        arm.solve_pose(arm.fk(np.zeros(7)), np.zeros(7), timeout=timeout)
 
 
 def test_cli_explicit_max_step_remains_a_hard_bound(fake_sdk):
-    result=cli(fake_sdk,'ik','--delta','0','0','.05','--max-step','.001','--execute')
-    assert result.returncode==2 and not (fake_sdk/'called.json').exists()
-    result=cli(fake_sdk,'ik','--delta','0','0','.05','--max-step','.001','--search','adaptive','--execute')
-    assert result.returncode==2 and not (fake_sdk/'called.json').exists()
+    result = cli(fake_sdk, "ik", "--delta", "0", "0", ".05", "--max-step", ".001", "--execute")
+    assert result.returncode == 2 and not (fake_sdk/"called.json").exists()
+    result = cli(fake_sdk, "ik", "--delta", "0", "0", ".05", "--max-step", ".001",
+                 "--search", "adaptive", "--execute")
+    assert result.returncode == 2 and not (fake_sdk/"called.json").exists()

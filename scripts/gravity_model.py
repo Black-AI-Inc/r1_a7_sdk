@@ -1,7 +1,8 @@
 """URDF static gravity model, in URDF joint coordinates and output-side Nm.
 
-No serial IO. The native worker evaluates the same model at measured q.
-Only masses and centres of mass are needed for static gravity compensation.
+No serial IO. The native worker evaluates the same model at measured q
+(keyboard_native/gravity_model.h). Only masses and centres of mass are needed
+for static gravity compensation. Run directly for an offline torque report.
 """
 import argparse
 import json
@@ -20,6 +21,7 @@ DEFAULT_PROFILE = SDK / "config/dex1_gravity.json"
 
 
 def bounded(value, low, high, name):
+    """float(value), or ValueError unless finite and within low..high."""
     value = float(value)
     if not np.isfinite(value) or not low <= value <= high:
         raise ValueError(f"{name} must be finite and in {low}..{high}")
@@ -27,6 +29,12 @@ def bounded(value, low, high, name):
 
 
 class GravityModel:
+    """Arm links from the URDF plus an optional tool from a gravity profile JSON.
+
+    The tool (gripper and adapter, plus the profile's object when carrying)
+    is lumped into one mass and COM in the Link7 frame.
+    """
+
     def __init__(self, urdf=SDK / URDF_REL, profile=None, carrying=False):
         self.arm = ArmIK(urdf=urdf)
         root = ET.parse(urdf).getroot()
@@ -73,6 +81,7 @@ class GravityModel:
         self.gravity = np.array([0., 0., -9.81])
 
     def evaluate(self, q):
+        """Feedforward torques that hold q (arm, tool, total) and the potential energy."""
         q = vector(q, 7)
         transform = np.eye(4)
         positions, axes, world_coms = [], [], []
@@ -106,12 +115,15 @@ class GravityModel:
 
 
 def add_gravity_args(parser):
-    parser.add_argument("--gravity-profile", type=Path, help="Tool mass/COM JSON; no compensation without explicit scale")
-    parser.add_argument("--gravity-scale", type=float, default=0., help="0..1, default OFF; start physical validation at 0.25")
+    parser.add_argument("--gravity-profile", type=Path,
+                        help="Tool mass/COM JSON (tuned profile: config/dex1_gravity.json; legacy: none)")
+    parser.add_argument("--gravity-scale", type=float, default=0.,
+                        help="Fraction of the gravity torque fed forward, 0..1 (tuned profile: 1; legacy: 0 = off)")
     parser.add_argument("--carrying", action="store_true", help="Include profile object mass; restart after changing load")
 
 
 def worker_gravity_args(args):
+    """Worker options for gravity compensation; [] without a profile."""
     scale = bounded(getattr(args, "gravity_scale", 0.), 0, 1, "gravity scale")
     profile = getattr(args, "gravity_profile", None)
     carrying = getattr(args, "carrying", False)
@@ -121,13 +133,14 @@ def worker_gravity_args(args):
         return []
     model = GravityModel(urdf=getattr(args, "urdf", SDK / URDF_REL),
                          profile=profile, carrying=carrying)
-    # The SDK currently treats torque like velocity during coordinate conversion.
-    # That is correct for sign changes, but not non-unit transmission scale.
+    # The SDK converts torque with the same dir*scale factor as velocity. That
+    # is right for sign changes but not for a non-unit transmission scale.
     if getattr(args, "execute", False) and scale:
         calibration = np.loadtxt(getattr(args, "calibration_file", SDK / "config/joint_calib.txt"),
                                  comments="#")
         if calibration.shape != (7, 4) or not np.allclose(calibration[:, 2], 1., rtol=0, atol=1e-9):
-            raise ValueError("Gravity compensation requires unit calibration scale; torque mapping must be audited otherwise")
+            raise ValueError("Gravity compensation requires unit calibration scale; "
+                             "torque mapping must be audited otherwise")
     return ["--gravity-model", model.native_record(), "--gravity-scale", str(scale)]
 
 
