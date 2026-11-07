@@ -9,9 +9,8 @@ R1-7A 七轴机械臂 SDK（IM6014 串口总线），附键盘点动、Qt GUI �
 </div>
 
 本仓库 fork 自宇树官方 [unitreerobotics/r1-7a_sdk](https://github.com/unitreerobotics/r1-7a_sdk)，
-基于上游 commit `2c89fe4f`（2026-10-12）。上游的底层 SDK 保持原样，
+并已合并上游截至 `0803d033`（2026-11-03）的更新。上游的底层 SDK 保持原样，
 新增内容都在 `scripts/`、`tests/` 和两份配置文件中，另对 `ArmMotorBus` 和串口驱动做了少量扩展。
-上游在此之后的更新（左右臂区分等）尚未合并。
 
 本仓库不是宇树官方仓库，新增功能出现问题请在本仓库提 issue。
 
@@ -57,33 +56,43 @@ make
 可执行文件输出到 `bin/`：
 
 - `test_arm_lowlevel`：底层命令，包括 FOC、停止、回零和 goto
-- `calibrate_joints`：关节标定工具（URDF 坐标与电机坐标的换算）
 - `demo_arm_motion`：预设的关节运动演示
+
+关节标定工具 `calibrate_joints`（`src/calibrate_joints.cpp`）在上游 `CMakeLists.txt` 中已被注释掉，默认不编译。
+
+左右臂的 URDF 打包在 `urdf/URDF_R1-7A.tar.gz`，解压到 `urdf/` 下使用：
+
+```bash
+tar -xzf urdf/URDF_R1-7A.tar.gz -C urdf
+```
 
 ### 使用方法
 
-默认串口 `/dev/ttyUSB3`，波特率 `6000000`。关节标定从 `config/joint_calib.txt` 读取，
-路径相对于当前工作目录；在 `bin/` 下运行时使用默认的 `../config/joint_calib.txt`。
+波特率 `6000000`，下面的例子使用串口 `/dev/ttyUSB3`，请用 `--port` 指定实际设备。
+`test_arm_lowlevel` 和 `demo_arm_motion` 必须用 `-r` / `--right` 或 `-l` / `--left` 选择机械臂，
+分别读取 `config/joint_calib_right.txt` 和 `config/joint_calib_left.txt`。
+标定文件路径相对于当前工作目录，在 `bin/` 下运行时使用默认的 `../config/...`。
 
 保持当前姿态（FOC）：
 
 ```bash
 cd bin
-./test_arm_lowlevel --foc --port /dev/ttyUSB3
+./test_arm_lowlevel --foc -r --port /dev/ttyUSB3
 ```
 
 回到 URDF 零位：
 
 ```bash
-./test_arm_lowlevel --home --kp 60
+./test_arm_lowlevel --home -r --kp 60
 ```
 
 移动到指定关节角：
 
 ```bash
-./test_arm_lowlevel --goto --q 0 0 0 0 0 0 0 --kp 60
+./test_arm_lowlevel --goto -r --q 0 0 0 0 0 0 0 --kp 60
 ```
 
+`--goto-hold` 与 `--goto` 相同，但到位后一直保持，直到 Ctrl-C。
 其他命令：`--stop`、`--zero-torque`、`--clear`、`--reset`。每次运行只能使用一个命令。
 对持续运行的模式，Ctrl-C 会发送停止（mode 0）并退出。
 
@@ -91,18 +100,12 @@ cd bin
 
 ```bash
 cd bin
-./demo_arm_motion --port /dev/ttyUSB3
+./demo_arm_motion -r --port /dev/ttyUSB3
 ```
 
 演示程序等待 7 个关节都有反馈后，在当前姿态使能 FOC，然后按固定顺序执行余弦速度曲线的运动。
 `--speed`、`--wrist-speed` 调整关节速度，`--kp`、`--kd` 调整增益，`--rate` 设置控制频率（默认 100 Hz）。
 Ctrl-C 停止所有电机并退出。
-
-关节标定（先把机械臂摆到期望的 URDF 零位）：
-
-```bash
-./calibrate_joints --port /dev/ttyUSB3 --out ../config/joint_calib.txt
-```
 
 标定公式：`urdf = dir * scale * motor + offset`。
 
@@ -123,6 +126,7 @@ Ctrl-C 停止所有电机并退出。
 键盘工具和 GUI 共用一个 C++ 控制进程 `scripts/keyboard_native/worker.cpp`。它以 100 Hz 运行，
 负责 Ruckig 平滑轨迹、重力前馈、关节积分、故障处理和启动时的越限恢复。
 两个工具默认都只连接模拟驱动，不打开串口；加 `--execute` 才连接真机。
+目前这些工具只支持右臂：使用上游的右臂 URDF（`build_keyboard.sh` 会自动从压缩包解压）和 `config/joint_calib_right.txt`。
 
 对 SDK 本身的改动：`ArmMotorBus` 增加带时间戳的反馈快照（`feedbackSnapshot()`、`feedbackAges()`），
 `open()` 和串口驱动增加独占打开选项。
@@ -178,8 +182,8 @@ P 移到准备姿态；H 回零；Enter 在阻尼保持后恢复；Esc 停止并
 命令行显式给出的参数优先于配置。如果给出与配置不同的 `--kp` 或 `--kd`，所有关节改用这一组统一增益。
 反馈中断、电机报错、退出 FOC、按 Esc 或停止、程序退出时，两种配置都会释放力矩。
 
-`config/joint_calib.txt` 是做上述实测的那台机械臂的标定。换一台机械臂前，
-先用 `calibrate_joints` 重新标定并覆盖该文件，增益和重力参数也要在新机械臂上重新确认。
+`config/joint_calib_right.txt` 是做上述实测的那台机械臂的标定，不是上游原有的数值。换一台机械臂前，
+先重新标定并覆盖该文件，增益和重力参数也要在新机械臂上重新确认。
 
 ### 使用须知
 

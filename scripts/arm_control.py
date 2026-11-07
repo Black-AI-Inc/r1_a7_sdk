@@ -28,8 +28,11 @@ from scipy.spatial.transform import Rotation
 POSE_IK_TIMEOUT = 3.0   # s, default wall-time budget of one solve_pose() request
 
 SDK = Path(__file__).resolve().parents[1]
-URDF_REL = Path("urdf/R1_Robotic_Arm_V1.1-0915/R1_Robotic_Arm_V1.1_0915/"
+# The tools drive the right arm: upstream's right-arm URDF, extracted from
+# urdf/URDF_R1-7A.tar.gz by build_keyboard.sh, and the matching calibration.
+URDF_REL = Path("urdf/R1_Robotic_Arm_R_V1.2-1023/R1_Robotic_Arm_V1.2/"
                 "R1_Robotic_Arm/urdf/R1_Robotic_Arm.urdf")
+CALIB_REL = Path("config/joint_calib_right.txt")
 
 
 def vector(values, count):
@@ -326,7 +329,7 @@ def sdk_command(args, q):
             *[format(float(v), ".12g") for v in q], "--port", args.port,
             "--kp", str(args.kp), "--kd", str(args.kd),
             "--home-lead", str(args.home_lead), "--rate", str(args.rate),
-            "--move-ms", str(args.move_ms), "--hold-ms", str(args.hold_ms)]
+            "--move-ms", str(args.move_ms), "--hold-ms", str(args.hold_ms), "--right"]
 
 
 def main(argv=None):
@@ -408,7 +411,7 @@ def main(argv=None):
             return 0
         if not Path(command[0]).is_file() or not os.access(command[0], os.X_OK):
             raise ValueError("SDK executable missing; build test_arm_lowlevel first")
-        if not (args.sdk_dir / "config/joint_calib.txt").is_file():
+        if not (args.sdk_dir / CALIB_REL).is_file():
             raise ValueError("SDK joint calibration file missing")
         print("Executing SDK goto; it stops/releases torque after hold-ms. Ctrl-C is handled by SDK.", flush=True)
         # Replace process so SIGINT/SIGTERM reach the SDK directly. No shell.

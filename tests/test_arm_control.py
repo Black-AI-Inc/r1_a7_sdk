@@ -96,7 +96,7 @@ def fake_sdk(tmp_path):
     sdk = tmp_path / "sdk with spaces"
     (sdk / "bin").mkdir(parents=True)
     (sdk / "config").mkdir()
-    (sdk / "config/joint_calib.txt").write_text("TEST ONLY\n")
+    (sdk / control.CALIB_REL).write_text("TEST ONLY\n")
     urdf = sdk / control.URDF_REL
     urdf.parent.mkdir(parents=True)
     urdf.write_bytes((control.SDK / control.URDF_REL).read_bytes())
@@ -127,7 +127,7 @@ def test_execute_exact_command_cwd_and_exit_status(fake_sdk):
     call = json.loads((fake_sdk / "called.json").read_text())
     assert call["cwd"] == str(fake_sdk / "bin")
     assert call["argv"][1:10] == ["--goto", "--q", *["0"] * 7]
-    assert call["argv"][-2:] == ["--hold-ms", "2000"]
+    assert call["argv"][-3:] == ["--hold-ms", "2000", "--right"]
 
 
 @pytest.mark.parametrize("args", [

@@ -85,7 +85,7 @@ Esc 之后要重新启动程序才能再次使能。空格只是保持，Esc 会
   -0.004018032920 0.256020348855 0.009633129608
 ```
 
-准备姿态只是工作起点，不要为此修改 `joint_calib.txt`。
+准备姿态只是工作起点，不要为此修改标定文件。
 
 ## 平滑轨迹
 
@@ -158,7 +158,7 @@ Esc 之后要重新启动程序才能再次使能。空格只是保持，Esc 会
 - 轨迹平滑使用 [Ruckig v0.15.3](https://github.com/pantor/ruckig/tree/v0.15.3) 的 state-to-state C++ 实现，
   源码和许可证在 `keyboard_native/third_party/ruckig/`，构建和运行都不需要联网。
   每次规划还检查整条轨迹的位置极值，确保在线换目标时不越过 URDF 限位。
-- 控制进程直接使用 SDK 的 `ArmMotorBus`、`config/joint_calib.txt` 和串口驱动源码。
+- 控制进程直接使用 SDK 的 `ArmMotorBus`、`config/joint_calib_right.txt` 和串口驱动源码。
 - IK 的来源和坐标约定见 [README_ik.md](README_ik.md)。
 
 ## 安装与测试

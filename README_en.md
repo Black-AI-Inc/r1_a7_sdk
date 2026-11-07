@@ -9,9 +9,8 @@ SDK for the R1-7A 7-DoF arm (IM6014 serial bus), with keyboard jogging, a Qt GUI
 </div>
 
 This repository is a fork of Unitree's official [unitreerobotics/r1-7a_sdk](https://github.com/unitreerobotics/r1-7a_sdk),
-based on upstream commit `2c89fe4f` (2026-10-12). The low-level SDK is unchanged. Everything added lives in
-`scripts/`, `tests/` and two config files, plus small extensions to `ArmMotorBus` and the serial driver.
-Later upstream changes (left/right arm selection and others) have not been merged yet.
+with upstream changes merged up to `0803d033` (2026-11-03). The low-level SDK is unchanged. Everything added lives
+in `scripts/`, `tests/` and two config files, plus small extensions to `ArmMotorBus` and the serial driver.
 
 This is not an official Unitree repository. Please report problems with the added tools here.
 
@@ -57,33 +56,44 @@ make
 Binaries are written to `bin/`:
 
 - `test_arm_lowlevel`: low-level FOC / stop / home / goto commands
-- `calibrate_joints`: joint calibration tool (URDF ↔ motor frame)
 - `demo_arm_motion`: pre-programmed joint motion demo
+
+The joint calibration tool `calibrate_joints` (`src/calibrate_joints.cpp`) is commented out in upstream's
+`CMakeLists.txt` and is not built by default.
+
+The left- and right-arm URDFs are packed in `urdf/URDF_R1-7A.tar.gz`; extract them under `urdf/`:
+
+```bash
+tar -xzf urdf/URDF_R1-7A.tar.gz -C urdf
+```
 
 ### Usage
 
-The default serial port is `/dev/ttyUSB3` at `6000000` baud. Joint calibration is read from `config/joint_calib.txt`,
-relative to the working directory; when run from `bin/`, the default `../config/joint_calib.txt` is used.
+The baudrate is `6000000`; the examples use `/dev/ttyUSB3`, so pass your device with `--port`.
+`test_arm_lowlevel` and `demo_arm_motion` require `-r` / `--right` or `-l` / `--left` to select the arm, which loads
+`config/joint_calib_right.txt` or `config/joint_calib_left.txt`. Calibration paths are relative to the working
+directory; when run from `bin/`, the default `../config/...` paths are used.
 
 Hold the current pose (FOC):
 
 ```bash
 cd bin
-./test_arm_lowlevel --foc --port /dev/ttyUSB3
+./test_arm_lowlevel --foc -r --port /dev/ttyUSB3
 ```
 
 Move to URDF zero (home):
 
 ```bash
-./test_arm_lowlevel --home --kp 60
+./test_arm_lowlevel --home -r --kp 60
 ```
 
 Move to a joint target (goto):
 
 ```bash
-./test_arm_lowlevel --goto --q 0 0 0 0 0 0 0 --kp 60
+./test_arm_lowlevel --goto -r --q 0 0 0 0 0 0 0 --kp 60
 ```
 
+`--goto-hold` is like `--goto` but keeps holding the target until Ctrl-C.
 Other commands: `--stop`, `--zero-torque`, `--clear`, `--reset`. Use exactly one command per run.
 For long-running modes, Ctrl-C sends stop (mode 0) and exits.
 
@@ -91,18 +101,12 @@ Run the pre-programmed motion demo:
 
 ```bash
 cd bin
-./demo_arm_motion --port /dev/ttyUSB3
+./demo_arm_motion -r --port /dev/ttyUSB3
 ```
 
 The demo waits for feedback from all 7 joints, enables FOC at the current pose, and then runs a fixed sequence of
 cosine-profile moves. Use `--speed` and `--wrist-speed` for joint velocities, `--kp` / `--kd` for gains and `--rate`
 for the control loop frequency (default 100 Hz). Ctrl-C stops all motors and exits.
-
-Calibrate the joints (pose the arm at the desired URDF zero first):
-
-```bash
-./calibrate_joints --port /dev/ttyUSB3 --out ../config/joint_calib.txt
-```
 
 Calibration formula: `urdf = dir * scale * motor + offset`.
 
@@ -123,7 +127,8 @@ Public `q` / `dq` / `tau` use the URDF frame; conversion happens at the `ArmMoto
 The keyboard tool and the GUI share one C++ control process, `scripts/keyboard_native/worker.cpp`. It runs at
 100 Hz and handles Ruckig trajectory smoothing, gravity feedforward, the joint integral term, fault handling and
 recovery of slightly out-of-limit joints at startup. Both tools start against a simulated driver and do not open
-the serial port unless `--execute` is given.
+the serial port unless `--execute` is given. The tools currently support the right arm only: they use upstream's
+right-arm URDF (extracted from the tarball by `build_keyboard.sh`) and `config/joint_calib_right.txt`.
 
 Changes to the SDK itself: `ArmMotorBus` gains a time-stamped feedback snapshot (`feedbackSnapshot()`,
 `feedbackAges()`), and `open()` and the serial driver gain an option to open the port exclusively.
@@ -181,8 +186,8 @@ Options given explicitly on the command line override the profile. A `--kp` or `
 switches all joints to that single pair of gains. Both profiles release torque on feedback loss, a motor error,
 leaving FOC, Esc or Stop, and program exit.
 
-`config/joint_calib.txt` is the calibration of the arm used for these measurements. On another arm, recalibrate with
-`calibrate_joints` and overwrite this file first, then re-check the gains and the gravity parameters.
+`config/joint_calib_right.txt` is the calibration of the arm used for these measurements, not upstream's values. On
+another arm, recalibrate and overwrite this file first, then re-check the gains and the gravity parameters.
 
 ### Before running on hardware
 

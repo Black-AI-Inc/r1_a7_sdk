@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from arm_control import SDK, URDF_REL
+from arm_control import CALIB_REL, SDK, URDF_REL
 from gravity_model import GravityModel, DEFAULT_PROFILE, worker_gravity_args
 from keyboard_control import Worker, DEFAULT_READY_Q, parse_args as _parse_args
 
@@ -129,7 +129,7 @@ def test_gravity_uses_selected_calibration_before_hardware_start(tmp_path, monke
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: pytest.fail("unexpected child"))
     args = parse_args(["--gravity-profile", str(DEFAULT_PROFILE), "--gravity-scale", ".25"])
     args.execute = True  # only validates files; never constructs a worker
-    calib = np.loadtxt(SDK / "config/joint_calib.txt", comments="#")
+    calib = np.loadtxt(SDK / CALIB_REL, comments="#")
     calib[0, 2] = 2.
     args.calibration_file = tmp_path / "custom_calib.txt"
     np.savetxt(args.calibration_file, calib)

@@ -13,9 +13,9 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 if __package__:
-    from .arm_control import ArmIK, SDK, URDF_REL, pose_matrix, vector
+    from .arm_control import ArmIK, CALIB_REL, SDK, URDF_REL, pose_matrix, vector
 else:
-    from arm_control import ArmIK, SDK, URDF_REL, pose_matrix, vector
+    from arm_control import ArmIK, CALIB_REL, SDK, URDF_REL, pose_matrix, vector
 
 DEFAULT_PROFILE = SDK / "config/dex1_gravity.json"
 
@@ -136,7 +136,7 @@ def worker_gravity_args(args):
     # The SDK converts torque with the same dir*scale factor as velocity. That
     # is right for sign changes but not for a non-unit transmission scale.
     if getattr(args, "execute", False) and scale:
-        calibration = np.loadtxt(getattr(args, "calibration_file", SDK / "config/joint_calib.txt"),
+        calibration = np.loadtxt(getattr(args, "calibration_file", SDK / CALIB_REL),
                                  comments="#")
         if calibration.shape != (7, 4) or not np.allclose(calibration[:, 2], 1., rtol=0, atol=1e-9):
             raise ValueError("Gravity compensation requires unit calibration scale; "

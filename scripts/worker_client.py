@@ -11,10 +11,10 @@ import subprocess
 import time
 
 if __package__:
-    from .arm_control import SDK, vector
+    from .arm_control import CALIB_REL, SDK, vector
     from .gravity_model import worker_gravity_args
 else:
-    from arm_control import SDK, vector
+    from arm_control import CALIB_REL, SDK, vector
     from gravity_model import worker_gravity_args
 
 
@@ -33,7 +33,7 @@ class Worker:
         binary = Path(binary) if binary is not None else SDK / "build/keyboard/r1_keyboard_worker"
         if not binary.is_file():
             raise RuntimeError("Build worker first: ./scripts/build_keyboard.sh")
-        calibration = getattr(args, "calibration_file", SDK / "config/joint_calib.txt")
+        calibration = getattr(args, "calibration_file", SDK / CALIB_REL)
         command = [str(binary), "--hardware" if args.execute else "--mock",
                    "--port", args.port, "--calib", str(calibration),
                    "--kp", str(args.kp), "--kd", str(args.kd),

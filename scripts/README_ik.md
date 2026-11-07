@@ -3,7 +3,7 @@
 入口：`scripts/arm_control.sh`，实现在 `scripts/arm_control.py`。
 
 流程：读取 SDK 的单臂 URDF → CasADi 构建 FK 和解析雅可比 → 有界最小二乘 IK → 用独立的 FK 校验结果 →
-调用官方 `test_arm_lowlevel --goto --q ...` 执行。使用现有的 `config/joint_calib.txt`，
+调用官方 `test_arm_lowlevel --goto --right --q ...` 执行。使用现有的 `config/joint_calib_right.txt`，
 不另做电机角度换算，不依赖 ROS、DDS 或其他外部服务。
 
 ## 使用
@@ -30,7 +30,7 @@
 ```
 
 加 `--execute` 后直接运行，不再确认；不加时只求解和打印，不打开串口。
-脚本可以从任意目录运行，执行前会切换到 `bin/`，使官方程序读到 `../config/joint_calib.txt`。
+脚本可以从任意目录运行，执行前会切换到 `bin/`，使官方程序读到 `../config/joint_calib_right.txt`。
 执行时脚本用 `exec` 替换为官方程序，Ctrl-C 和 SIGTERM 由官方程序处理。
 
 ## 坐标、种子和 TCP
@@ -78,8 +78,8 @@
 
 ## IK 来源与改动
 
-1. [unitreerobotics/r1-7a_sdk](https://github.com/unitreerobotics/r1-7a_sdk)：单臂 URDF、关节顺序、标定和 `goto` 执行，
-   基于 commit `2c89fe4f`。
+1. [unitreerobotics/r1-7a_sdk](https://github.com/unitreerobotics/r1-7a_sdk)：右臂 URDF（`R1_Robotic_Arm_R_V1.2-1023`）、关节顺序、标定和 `goto` 执行。
+   与之前的 V1.1-0915 相比只把 J6 限位从 ±0.524 rad 放宽到 ±0.785 rad，运动学和质量参数不变。
 2. [xr_teleoperate 中的 R1_A7_ArmIK](https://github.com/unitreerobotics/xr_teleoperate/blob/817fb00c63cde15e5f24a0f8fa08e1e33ed89d3b/teleop/robot_control/robot_arm_ik.py#L1753)：
    宇树提供的 R1 七自由度 IK，原版针对整机双臂，使用 Pinocchio + CasADi/IPOPT。
    本实现沿用了它的四项优化目标和权重：位置 50、方向 1、关节正则 0.02、种子平滑 0.1。
