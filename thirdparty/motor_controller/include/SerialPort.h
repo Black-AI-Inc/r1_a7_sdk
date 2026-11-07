@@ -25,6 +25,7 @@ public:
     ~SerialPort();
 
     bool open(const std::string& port, int baudrate, double timeout = 0.1);
+    bool open(const std::string& port, int baudrate, double timeout, bool exclusive);
     void close();
     bool isOpen() const;
     void write(const std::vector<uint8_t>& data);

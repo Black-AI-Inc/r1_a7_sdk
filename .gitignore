@@ -1,3 +1,9 @@
-# Build output
+# Build output (CMake builds, native worker, diagnostic logs under build/keyboard/logs)
 bin/
 build/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv-ik

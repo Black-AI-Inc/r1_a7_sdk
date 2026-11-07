@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "name": "DEX1-1 flush adapter, upright R1-7A",
+  "mount_confirmed": true,
+  "hardware_validated": false,
+  "empty_mass_kg": 0.55,
+  "adapter_mass_kg": 0.003,
+  "object_mass_kg": 0.05,
+  "link7_to_gripper_xyz_rpy": [
+    0,
+    -0.04973612,
+    0,
+    3.141592653589793,
+    0.0,
+    -1.5707963267948966
+  ],
+  "gripper_com_in_gripper_m": [
+    0.05793057202435429,
+    -6.848746937903122e-05,
+    7.343262126451591e-06
+  ],
+  "adapter_com_in_link7_m": [
+    0,
+    -0.04873612,
+    0
+  ],
+  "object_com_in_gripper_m": [
+    0.12,
+    0,
+    0
+  ],
+  "evidence": {
+    "user": "2026-10-28: empty assembly 550 g incl. 3 g adapter, nominal object 50 g, upright base, zero-pose fingers extend -Y and open along X, 2 mm face gap.",
+    "cad": "Dex1-1-r1-adapter-main/references/g1_with_dex.urdf: left_dex1_base_link + two equal finger links, local +X extends toward tips; symmetric opening does not change combined COM.",
+    "cad_mass_kg": 0.364946,
+    "com_method": "Preserve CAD COM, scale gripper to 547 g; this assumes unchanged mass distribution and requires physical validation.",
+    "flange": "SDK Link7.STL front face y=-0.04773612 m; centre x=z=0 is a CAD estimate. Add 2 mm along local -Y. No original 14.5 mm adapter offset.",
+    "roll": "Gripper +Y chosen toward base +X near zero. 180 degree roll is not distinguished by the reported jaw axis; lateral CAD COM offset is below 0.1 mm.",
+    "object_com": "ASSUMED centred grasp at 120 mm from gripper mounting face; measure actual grasp centre before using loaded compensation.",
+    "TCP": "This profile does not change IK TCP; object COM is not a calibrated TCP."
+  }
+}

@@ -44,6 +44,10 @@ SerialPort::~SerialPort() {
 }
 
 bool SerialPort::open(const std::string& port, int baudrate, double timeout) {
+    return open(port, baudrate, timeout, false);
+}
+
+bool SerialPort::open(const std::string& port, int baudrate, double timeout, bool exclusive) {
     if (m_isOpen) {
         close();
     }
@@ -73,6 +77,10 @@ bool SerialPort::open(const std::string& port, int baudrate, double timeout) {
     if (m_fd < 0) {
         std::cerr << "Failed to open port " << port << ": " << strerror(errno) << std::endl;
         return false;
+    }
+    if (exclusive && ::ioctl(m_fd, TIOCEXCL) < 0) {
+        std::cerr << "Cannot exclusively lock serial port " << port << std::endl;
+        ::close(m_fd); m_fd = -1; return false;
     }
 #endif
 

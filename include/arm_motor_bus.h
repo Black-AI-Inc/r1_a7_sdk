@@ -43,6 +43,15 @@ struct ArmJointState {
     uint32_t error_code = 0;
 };
 
+/** One receive-lock snapshot; missing packets must not look like measured zero. */
+struct ArmFeedbackSnapshot {
+    std::array<ArmJointState, kArmJointCount> motor{}, urdf{};
+    std::array<bool, kArmJointCount> ready{};
+    std::array<double, kArmJointCount> age_s{};
+    std::array<uint8_t, kArmJointCount> motor_ids{};
+    std::array<JointCalibration, kArmJointCount> calibration{};
+};
+
 /**
  * Multi-joint IM6014 bus: one serial port, motors addressed by ID.
  * Default mapping: joint[i] <-> motor_id = i.
@@ -62,7 +71,8 @@ public:
      */
     bool open(const std::string& port,
               int baudrate = kArmDefaultBaudrate,
-              const std::string& calib_path = kDefaultJointCalibPath);
+              const std::string& calib_path = kDefaultJointCalibPath,
+              bool exclusive = false);
     void close();
     bool isOpen() const;
 
@@ -104,6 +114,10 @@ public:
 
     /** True if every joint has received at least one valid feedback. */
     bool allFeedbackReady() const;
+
+    /** Age of each latest feedback in seconds; infinity before first packet. */
+    std::array<double, kArmJointCount> feedbackAges() const;
+    ArmFeedbackSnapshot feedbackSnapshot() const;
 
 private:
     struct Impl;

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -55,6 +56,7 @@ struct ArmMotorBus::Impl {
     mutable std::mutex fb_mutex;
     std::array<ArmJointState, kArmJointCount> latest_motor{};  // raw motor frame
     std::array<bool, kArmJointCount> fb_ready{};
+    std::array<std::chrono::steady_clock::time_point, kArmJointCount> fb_time{};
     bool opened = false;
     std::string port;
     int baudrate = kArmDefaultBaudrate;
@@ -91,6 +93,7 @@ struct ArmMotorBus::Impl {
         latest_motor[joint].timeout = fb->timeout;
         latest_motor[joint].error_code = fb->error_code;
         fb_ready[joint] = true;
+        fb_time[joint] = std::chrono::steady_clock::now();
     }
 
     void softStopAll() {
@@ -117,7 +120,7 @@ ArmMotorBus::~ArmMotorBus() {
 
 bool ArmMotorBus::open(const std::string& port,
                        int baudrate,
-                       const std::string& calib_path) {
+                       const std::string& calib_path, bool exclusive) {
     close();
 
     if (!loadJointCalibration(calib_path)) {
@@ -129,7 +132,7 @@ bool ArmMotorBus::open(const std::string& port,
     impl_->port = port;
     impl_->baudrate = baudrate;
 
-    if (!impl_->serial.open(port, baudrate, 0.05)) {
+    if (!impl_->serial.open(port, baudrate, 0.05, exclusive)) {
         std::cerr << "[ArmMotorBus] open failed: " << port << std::endl;
         return false;
     }
@@ -378,4 +381,33 @@ bool ArmMotorBus::allFeedbackReady() const {
         }
     }
     return true;
+}
+
+std::array<double, kArmJointCount> ArmMotorBus::feedbackAges() const {
+    std::lock_guard<std::mutex> lock(impl_->fb_mutex);
+    std::array<double, kArmJointCount> ages{};
+    const auto now = std::chrono::steady_clock::now();
+    for (int i = 0; i < kArmJointCount; ++i)
+        ages[i] = impl_->fb_ready[i] ? std::chrono::duration<double>(now - impl_->fb_time[i]).count()
+                                   : std::numeric_limits<double>::infinity();
+    return ages;
+}
+
+ArmFeedbackSnapshot ArmMotorBus::feedbackSnapshot() const {
+    std::lock_guard<std::mutex> lock(impl_->fb_mutex);
+    ArmFeedbackSnapshot out;
+    out.motor = impl_->latest_motor;
+    out.ready = impl_->fb_ready;
+    out.motor_ids = impl_->motor_ids;
+    out.calibration = impl_->calib;
+    const auto now = std::chrono::steady_clock::now();
+    for (int i = 0; i < kArmJointCount; ++i) {
+        out.urdf[i] = out.motor[i];
+        out.urdf[i].q = motorToUrdfAngle(out.motor[i].q, out.calibration[i]);
+        out.urdf[i].dq = motorToUrdfVec(out.motor[i].dq, out.calibration[i]);
+        out.urdf[i].tau_est = motorToUrdfVec(out.motor[i].tau_est, out.calibration[i]);
+        out.age_s[i] = out.ready[i] ? std::chrono::duration<double>(now - impl_->fb_time[i]).count()
+                                  : std::numeric_limits<double>::infinity();
+    }
+    return out;
 }
